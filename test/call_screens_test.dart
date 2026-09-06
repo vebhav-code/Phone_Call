@@ -229,6 +229,28 @@ void main() {
       expect(find.byKey(const Key('end_call_button')), findsOneWidget);
     });
 
+    testWidgets('defaults initial displayed status to Connecting... on mount',
+        (WidgetTester tester) async {
+      // webrtcService.callState is initially CallState.disconnected
+      expect(webrtcService.callState, CallState.disconnected);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: InCallScreen(
+            otherUserName: 'Charlie',
+            callId: 'call-300',
+            otherUserId: 'charlie-123',
+            signalingService: signalingService,
+            webrtcService: webrtcService,
+          ),
+        ),
+      );
+
+      // Verify that "Connecting..." is displayed and "Disconnected" is NOT displayed
+      expect(find.text('Connecting...'), findsOneWidget);
+      expect(find.text('Disconnected'), findsNothing);
+    });
+
     testWidgets('tapping end call button sends call_ended and triggers callback/pop',
         (WidgetTester tester) async {
       await signalingService.connect('user-1');

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:audio_session/audio_session.dart';
+import 'services/api_service.dart';
 import 'services/signaling_service.dart';
 
 enum CallState {
@@ -17,12 +18,11 @@ enum CallState {
 /// and hardware audio routing for 1-on-1 audio calls.
 /// Signaling is delegated to an injected [SignalingService].
 class WebRTCService extends ChangeNotifier {
-  static const Map<String, dynamic> _iceConfiguration = {
-    'iceServers': [
-      {'urls': 'stun:stun.l.google.com:19302'},
-    ],
-    'sdpSemantics': 'unified-plan',
-  };
+  static const List<Map<String, dynamic>> _fallbackIceServers = [
+    {
+      'urls': 'stun:stun.l.google.com:19302',
+    },
+  ];
 
   static const Map<String, dynamic> _audioConstraints = {
     'audio': {
@@ -45,9 +45,10 @@ class WebRTCService extends ChangeNotifier {
   MediaStream? _localStream;
   MediaStream? _remoteStream;
 
-  // External SignalingService & subscription
+  // External services & subscriptions
   SignalingService? _signalingService;
   StreamSubscription? _signalingSubscription;
+  ApiService apiService;
 
   // Audio session & routing
   AudioSession? _audioSession;
@@ -60,7 +61,17 @@ class WebRTCService extends ChangeNotifier {
   // Disconnect grace period timer for transient network hiccups
   Timer? _disconnectGraceTimer;
 
-  WebRTCService({SignalingService? signalingService}) {
+  // Cached ICE servers and TTL expiration
+  List<Map<String, dynamic>>? _cachedIceServers;
+  DateTime? _iceServersExpiry;
+
+  // Flag to attempt at most one ICE restart before giving up
+  bool _hasAttemptedIceRestart = false;
+
+  WebRTCService({
+    SignalingService? signalingService,
+    ApiService? apiService,
+  }) : apiService = apiService ?? ApiService() {
     if (signalingService != null) {
       setSignalingService(signalingService);
     }
@@ -81,6 +92,40 @@ class WebRTCService extends ChangeNotifier {
     }
   }
 
+  /// Fetches ICE servers via [ApiService.fetchTurnCredentials] with caching for the [ttl] duration,
+  /// falling back to standard STUN if the request fails.
+  Future<List<Map<String, dynamic>>> _getIceServers() async {
+    final now = DateTime.now();
+    if (_cachedIceServers != null &&
+        _iceServersExpiry != null &&
+        now.isBefore(_iceServersExpiry!)) {
+      debugPrint(
+        '[WebRTCService] Using cached ICE servers (expires in ${_iceServersExpiry!.difference(now).inSeconds}s)',
+      );
+      return _cachedIceServers!;
+    }
+
+    try {
+      final servers = await apiService.fetchTurnCredentials();
+      if (servers.isNotEmpty) {
+        final ttlSeconds =
+            apiService.lastTurnTtl > 0 ? apiService.lastTurnTtl : 3600;
+        _cachedIceServers = servers;
+        _iceServersExpiry = now.add(Duration(seconds: ttlSeconds));
+        debugPrint(
+          '[WebRTCService] Fetched and cached ${servers.length} ICE servers for ${ttlSeconds}s',
+        );
+        return servers;
+      }
+    } catch (e) {
+      debugPrint(
+        '[WebRTCService WARN] Failed to fetch TURN credentials from backend: $e. Falling back to default STUN.',
+      );
+    }
+
+    return _fallbackIceServers;
+  }
+
   // Public getters
   CallState get callState => _callState;
   bool get isMuted => _isMuted;
@@ -91,6 +136,29 @@ class WebRTCService extends ChangeNotifier {
   bool get isCaller => _isCaller;
   MediaStream? get localStream => _localStream;
   MediaStream? get remoteStream => _remoteStream;
+
+  @visibleForTesting
+  Future<List<Map<String, dynamic>>> getIceServers() => _getIceServers();
+
+  @visibleForTesting
+  List<Map<String, dynamic>>? get cachedIceServers => _cachedIceServers;
+
+  @visibleForTesting
+  DateTime? get iceServersExpiry => _iceServersExpiry;
+
+  @visibleForTesting
+  bool get hasAttemptedIceRestart => _hasAttemptedIceRestart;
+
+  @visibleForTesting
+  void handleIceFailureOrTimeout() => _handleIceFailureOrTimeout();
+
+  @visibleForTesting
+  void setIsCaller(bool isCaller) {
+    _isCaller = isCaller;
+  }
+
+  @visibleForTesting
+  void setCallStateForTesting(CallState state) => _setCallState(state);
 
   void _setCallState(CallState state) {
     if (_callState != state) {
@@ -126,7 +194,15 @@ class WebRTCService extends ChangeNotifier {
 
     _callId = callId;
     _isCaller = isCaller;
+    _hasAttemptedIceRestart = false;
     _setCallState(CallState.connecting);
+
+    // Fetch dynamic ICE servers (TURN + STUN) before creating peer connection
+    final iceServers = await _getIceServers();
+    final Map<String, dynamic> iceConfiguration = {
+      'iceServers': iceServers,
+      'sdpSemantics': 'unified-plan',
+    };
 
     try {
       // 1. Configure audio session for voiceCommunication category
@@ -165,8 +241,8 @@ class WebRTCService extends ChangeNotifier {
       _localStream =
           await navigator.mediaDevices.getUserMedia(_audioConstraints);
 
-      // 3. Create and configure RTCPeerConnection
-      _peerConnection = await createPeerConnection(_iceConfiguration);
+      // 3. Create and configure RTCPeerConnection with dynamic ICE servers
+      _peerConnection = await createPeerConnection(iceConfiguration);
 
       // Register local audio tracks to peer connection
       for (final track in _localStream!.getAudioTracks()) {
@@ -205,11 +281,12 @@ class WebRTCService extends ChangeNotifier {
         debugPrint('[WebRTCService STATE] onConnectionState -> $state');
         if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
           _disconnectGraceTimer?.cancel();
+          _hasAttemptedIceRestart = false;
           _setCallState(CallState.connected);
+          _logSelectedIceCandidatePair();
         } else if (state ==
             RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-          _disconnectGraceTimer?.cancel();
-          _setCallState(CallState.disconnected); // failed = truly terminal, no grace period
+          _handleIceFailureOrTimeout();
         } else if (state ==
             RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
           // Give it a chance to self-recover before declaring the call dead
@@ -217,7 +294,7 @@ class WebRTCService extends ChangeNotifier {
           _disconnectGraceTimer = Timer(const Duration(seconds: 6), () {
             if (_peerConnection?.connectionState ==
                 RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
-              _setCallState(CallState.disconnected);
+              _handleIceFailureOrTimeout();
             }
           });
         }
@@ -228,11 +305,11 @@ class WebRTCService extends ChangeNotifier {
         if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
             state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
           _disconnectGraceTimer?.cancel();
+          _hasAttemptedIceRestart = false;
           _setCallState(CallState.connected);
         } else if (state ==
             RTCIceConnectionState.RTCIceConnectionStateFailed) {
-          _disconnectGraceTimer?.cancel();
-          _setCallState(CallState.disconnected); // failed = truly terminal, no grace period
+          _handleIceFailureOrTimeout();
         } else if (state ==
             RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
           // Give it a chance to self-recover before declaring the call dead
@@ -240,7 +317,7 @@ class WebRTCService extends ChangeNotifier {
           _disconnectGraceTimer = Timer(const Duration(seconds: 6), () {
             if (_peerConnection?.iceConnectionState ==
                 RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-              _setCallState(CallState.disconnected);
+              _handleIceFailureOrTimeout();
             }
           });
         }
@@ -538,8 +615,145 @@ class WebRTCService extends ChangeNotifier {
     _isMuted = false;
     _isSpeakerOn = false;
     _callId = null;
+    _hasAttemptedIceRestart = false;
 
     _setCallState(CallState.disconnected);
+  }
+
+  /// Handles ICE failure or disconnected timeout by attempting an ICE restart once before failing.
+  void _handleIceFailureOrTimeout() {
+    _disconnectGraceTimer?.cancel();
+    if (!_hasAttemptedIceRestart) {
+      _hasAttemptedIceRestart = true;
+      if (_isCaller) {
+        _performIceRestart();
+      } else {
+        // Callee waits for the renegotiated offer from the caller
+        debugPrint(
+          '[WebRTCService] ICE failed/disconnected on callee, waiting for ICE restart offer from caller...',
+        );
+        _disconnectGraceTimer = Timer(const Duration(seconds: 6), () {
+          final iceState = _peerConnection?.iceConnectionState;
+          final connState = _peerConnection?.connectionState;
+          if (iceState ==
+                  RTCIceConnectionState.RTCIceConnectionStateDisconnected ||
+              iceState == RTCIceConnectionState.RTCIceConnectionStateFailed ||
+              connState ==
+                  RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
+              connState ==
+                  RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+            debugPrint(
+              '[WebRTCService] ICE restart window expired on callee, disconnecting.',
+            );
+            _setCallState(CallState.disconnected);
+          }
+        });
+      }
+    } else {
+      debugPrint(
+        '[WebRTCService] ICE failed or disconnected after restart attempt. Disconnecting.',
+      );
+      _setCallState(CallState.disconnected);
+    }
+  }
+
+  /// Triggers an ICE restart as the caller by calling restartIce() and sending a new SDP offer.
+  Future<void> _performIceRestart() async {
+    debugPrint('[WebRTCService] Triggering ICE restart as caller...');
+    try {
+      if (_peerConnection != null) {
+        await _peerConnection!.restartIce();
+        await _createAndSendOffer();
+      }
+      // Start another grace window for the restart to establish
+      _disconnectGraceTimer = Timer(const Duration(seconds: 6), () {
+        final iceState = _peerConnection?.iceConnectionState;
+        final connState = _peerConnection?.connectionState;
+        if (iceState ==
+                RTCIceConnectionState.RTCIceConnectionStateDisconnected ||
+            iceState == RTCIceConnectionState.RTCIceConnectionStateFailed ||
+            connState ==
+                RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
+            connState == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+          debugPrint(
+            '[WebRTCService] ICE restart failed to reconnect in time. Disconnecting.',
+          );
+          _setCallState(CallState.disconnected);
+        }
+      });
+    } catch (e) {
+      debugPrint('[WebRTCService ERROR] Failed to perform ICE restart: $e');
+      _setCallState(CallState.disconnected);
+    }
+  }
+
+  /// Logs the candidate type (host/srflx/relay) of the selected ICE candidate pair once connected.
+  Future<void> _logSelectedIceCandidatePair() async {
+    if (_peerConnection == null) return;
+    try {
+      final List<StatsReport> reports = await _peerConnection!.getStats();
+      StatsReport? selectedPair;
+      final Map<String, StatsReport> candidateMap = {};
+
+      for (final report in reports) {
+        if (report.type == 'local-candidate' ||
+            report.type == 'remote-candidate') {
+          candidateMap[report.id] = report;
+        } else if (report.type == 'candidate-pair') {
+          final isSelected = report.values['selected'] == true ||
+              report.values['selected'] == 'true' ||
+              report.values['nominated'] == true ||
+              report.values['nominated'] == 'true' ||
+              report.values['state'] == 'succeeded';
+          if (isSelected) {
+            selectedPair = report;
+          }
+        } else if (report.type == 'googCandidatePair') {
+          if (report.values['googActiveConnection'] == 'true' ||
+              report.values['googActiveConnection'] == true) {
+            selectedPair = report;
+          }
+        }
+      }
+
+      if (selectedPair != null) {
+        final localId = (selectedPair.values['localCandidateId'] ??
+                selectedPair.values['googLocalAddress'])
+            ?.toString();
+        final remoteId = (selectedPair.values['remoteCandidateId'] ??
+                selectedPair.values['googRemoteAddress'])
+            ?.toString();
+        final localReport = candidateMap[localId];
+        final remoteReport = candidateMap[remoteId];
+
+        final localType = localReport?.values['candidateType'] ??
+            selectedPair.values['googLocalCandidateType'] ??
+            'unknown';
+        final remoteType = remoteReport?.values['candidateType'] ??
+            selectedPair.values['googRemoteCandidateType'] ??
+            'unknown';
+
+        debugPrint(
+          '[WebRTCService ICE] Connected candidate pair: local=$localType <-> remote=$remoteType',
+        );
+      } else {
+        final candidates = reports
+            .where((r) =>
+                r.type == 'local-candidate' ||
+                r.type == 'candidate-pair' ||
+                r.type == 'googCandidatePair')
+            .map((r) =>
+                '${r.type}: ${r.values['candidateType'] ?? r.values['googLocalCandidateType'] ?? r.values['state']}')
+            .join(', ');
+        debugPrint(
+          '[WebRTCService ICE] Active connection stats: $candidates',
+        );
+      }
+    } catch (e) {
+      debugPrint(
+        '[WebRTCService WARN] Could not inspect candidate pair stats: $e',
+      );
+    }
   }
 
   /// Handles Bluetooth headset or wired headset connect/disconnect events.

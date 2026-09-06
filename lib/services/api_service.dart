@@ -34,11 +34,42 @@ class ApiService {
 
   final String baseUrl;
   final http.Client _client;
+  int _lastTurnTtl = 3600;
 
   ApiService({
     this.baseUrl = defaultBaseUrl,
     http.Client? client,
   }) : _client = client ?? http.Client();
+
+  /// Cached TTL in seconds from the most recent TURN credentials response.
+  int get lastTurnTtl => _lastTurnTtl;
+
+  /// Fetches TURN/STUN credentials and ICE servers from GET /turn-credentials.
+  /// Returns the parsed iceServers list (`List<Map<String, dynamic>>`).
+  Future<List<Map<String, dynamic>>> fetchTurnCredentials() async {
+    final uri = Uri.parse('$baseUrl/turn-credentials');
+    final response = await _client.get(
+      uri,
+      headers: {'Accept': 'application/json'},
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final rawList = data['iceServers'] as List<dynamic>? ?? [];
+      final ttl = data['ttl'] as int?;
+      if (ttl != null && ttl > 0) {
+        _lastTurnTtl = ttl;
+      }
+      return rawList
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList();
+    } else {
+      throw ApiException(
+        _parseErrorMessage(response),
+        statusCode: response.statusCode,
+      );
+    }
+  }
 
   /// Registers a new user with a display name and unique username.
   /// Throws [UsernameTakenException] if HTTP 409 Conflict is returned.

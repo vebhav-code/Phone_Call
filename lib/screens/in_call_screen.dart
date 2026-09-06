@@ -29,6 +29,7 @@ class InCallScreen extends StatefulWidget {
 class _InCallScreenState extends State<InCallScreen> {
   late final WebRTCService _webrtc;
   SignalingService? _signaling;
+  late CallState _displayState;
 
   // Call duration timer
   final Stopwatch _stopwatch = Stopwatch();
@@ -44,6 +45,11 @@ class _InCallScreenState extends State<InCallScreen> {
     super.initState();
     _webrtc = widget.webrtcService ?? WebRTCService();
     _signaling = widget.signalingService;
+
+    // Default initial displayed status to Connecting... when entered via active call flow
+    _displayState = _webrtc.callState == CallState.connected
+        ? CallState.connected
+        : CallState.connecting;
 
     // Listen to WebRTC connection state to start duration timer
     _webrtcListener = _handleWebRTCStateChange;
@@ -66,6 +72,7 @@ class _InCallScreenState extends State<InCallScreen> {
   }
 
   void _handleWebRTCStateChange() {
+    _displayState = _webrtc.callState;
     if (_webrtc.callState == CallState.connected && !_stopwatch.isRunning) {
       _startTimer();
     } else if (_webrtc.callState == CallState.disconnected ||
@@ -184,9 +191,9 @@ class _InCallScreenState extends State<InCallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final String stateText = _formatCallState(_webrtc.callState);
-    final Color stateColor = _statusColor(_webrtc.callState);
-    final bool isCallActive = _webrtc.callState == CallState.connected;
+    final String stateText = _formatCallState(_displayState);
+    final Color stateColor = _statusColor(_displayState);
+    final bool isCallActive = _displayState == CallState.connected;
 
     return Scaffold(
       body: SafeArea(
@@ -253,7 +260,7 @@ class _InCallScreenState extends State<InCallScreen> {
                             iconSize: 32,
                             isSelected: _webrtc.isMuted,
                             onPressed: isCallActive ||
-                                    _webrtc.callState == CallState.connecting
+                                    _displayState == CallState.connecting
                                 ? () {
                                     _webrtc.toggleMute();
                                     setState(() {});
@@ -281,7 +288,7 @@ class _InCallScreenState extends State<InCallScreen> {
                             iconSize: 32,
                             isSelected: _webrtc.isSpeakerOn,
                             onPressed: isCallActive ||
-                                    _webrtc.callState == CallState.connecting
+                                    _displayState == CallState.connecting
                                 ? () async {
                                     await _webrtc.setSpeaker(!_webrtc.isSpeakerOn);
                                     setState(() {});
