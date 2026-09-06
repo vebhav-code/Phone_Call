@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import '../config.dart';
@@ -202,8 +203,12 @@ class ApiService {
       ),
     );
 
+    debugPrint('[VoiceDetection] uploading...');
     final streamedResponse = await _client.send(request);
     final response = await http.Response.fromStream(streamedResponse);
+
+    debugPrint('[VoiceDetection] HTTP status = ${response.statusCode}');
+    debugPrint('[VoiceDetection] response = ${response.body}');
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body) as Map<String, dynamic>;

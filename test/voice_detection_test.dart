@@ -317,6 +317,32 @@ void main() {
 
       service.dispose();
     });
+
+    test('reports recording failure when recorded file is missing or empty (does not call API)', () async {
+      final mockRecorder = MockRemoteAudioRecorder()..writeDummyDataOnStart = false;
+      bool uploadAttempted = false;
+
+      final mockClient = http_testing.MockClient((request) async {
+        uploadAttempted = true;
+        return http.Response('{}', 200);
+      });
+
+      final apiService = ApiService(baseUrl: 'https://test.com', client: mockClient);
+      final service = VoiceDetectionService(
+        apiService: apiService,
+        recorder: mockRecorder,
+        recordingDuration: const Duration(milliseconds: 50),
+      );
+
+      await service.startAnalysis(isCallActive: () => true);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(uploadAttempted, isFalse);
+      expect(service.status, VoiceAnalysisStatus.recordingFailed);
+      expect(service.errorMessage, 'Voice recording failed');
+
+      service.dispose();
+    });
   });
 
   group('InCallScreen Receiver UI Tests', () {

@@ -15,11 +15,17 @@ class VoiceDetectionResult {
   });
 
   factory VoiceDetectionResult.fromJson(Map<String, dynamic> json) {
+    double parseDouble(dynamic value) {
+      if (value is num) return value.toDouble();
+      if (value is String) return double.tryParse(value) ?? 0.0;
+      return 0.0;
+    }
+
     return VoiceDetectionResult(
       success: json['success'] as bool? ?? false,
-      fakeProbability: (json['fake_probability'] as num?)?.toDouble() ?? 0.0,
-      bonafideScore: (json['bonafide_score'] as num?)?.toDouble() ?? 0.0,
-      verdict: (json['verdict'] ?? '').toString(),
+      fakeProbability: parseDouble(json['fake_probability'] ?? json['fakeProbability']),
+      bonafideScore: parseDouble(json['bonafide_score'] ?? json['bonafideScore']),
+      verdict: (json['verdict'] ?? '').toString().trim().toUpperCase(),
       message: json['message']?.toString(),
     );
   }

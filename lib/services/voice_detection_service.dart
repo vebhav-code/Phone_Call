@@ -120,9 +120,9 @@ class VoiceDetectionService extends ChangeNotifier {
 
       await recorder.start(filePath, remoteStream: remoteStream);
       _isRecording = true;
-      debugPrint('[VoiceDetectionService] Started 10-second remote voice recording to $filePath');
+      debugPrint('[VoiceDetection] recording started');
     } catch (e) {
-      debugPrint('[VoiceDetectionService ERROR] Recording failed to start: $e');
+      debugPrint('[VoiceDetection] Recording failed to start: $e');
       _isRecording = false;
       _status = VoiceAnalysisStatus.recordingFailed;
       _errorMessage = 'Voice recording failed';
@@ -140,18 +140,18 @@ class VoiceDetectionService extends ChangeNotifier {
     if (_isCancelled || _isDisposed) return;
 
     if (isCallActive != null && !isCallActive()) {
-      debugPrint('[VoiceDetectionService] Call ended before 10-second mark. Aborting upload.');
+      debugPrint('[VoiceDetection] Call ended before 10-second mark. Aborting upload.');
       cancel();
       return;
     }
 
     // Exactly 10 seconds reached: stop the recording
-    debugPrint('[VoiceDetectionService] 10 seconds reached. Stopping recording...');
+    debugPrint('[VoiceDetection] recording stopped');
     _isRecording = false;
     try {
       await recorder.stop();
     } catch (e) {
-      debugPrint('[VoiceDetectionService WARN] Error stopping recorder: $e');
+      debugPrint('[VoiceDetection] Error stopping recorder: $e');
     }
 
     if (_isCancelled || _isDisposed || (isCallActive != null && !isCallActive())) {
@@ -160,8 +160,16 @@ class VoiceDetectionService extends ChangeNotifier {
     }
 
     final file = _tempFile;
-    if (file == null || !await file.exists() || await file.length() == 0) {
-      debugPrint('[VoiceDetectionService ERROR] Recorded file missing or empty');
+    final fileExists = file != null && await file.exists();
+    final fileSize = fileExists ? await file.length() : 0;
+    final hasMp3Ext = file != null && file.path.toLowerCase().endsWith('.mp3');
+
+    debugPrint('[VoiceDetection] file path = ${file?.path}');
+    debugPrint('[VoiceDetection] file exists = $fileExists');
+    debugPrint('[VoiceDetection] file size = $fileSize');
+
+    if (!fileExists || fileSize == 0 || !hasMp3Ext) {
+      debugPrint('[VoiceDetection] File missing, empty, or not .mp3. Reporting recording failure.');
       _status = VoiceAnalysisStatus.recordingFailed;
       _errorMessage = 'Voice recording failed';
       _deleteTempFile();
@@ -173,7 +181,7 @@ class VoiceDetectionService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      debugPrint('[VoiceDetectionService] Uploading MP3 to POST /voice-detection...');
+      debugPrint('[VoiceDetection] upload started');
       final detectionResult = await apiService.detectVoice(file);
 
       if (_isCancelled || _isDisposed || (isCallActive != null && !isCallActive())) {
@@ -181,37 +189,35 @@ class VoiceDetectionService extends ChangeNotifier {
         return;
       }
 
-      if (detectionResult.success) {
-        debugPrint(
-          '[VoiceDetectionService] Voice detected successfully: '
-          'verdict=${detectionResult.verdict}, '
-          'fake=${detectionResult.fakeProbability}, '
-          'bonafide=${detectionResult.bonafideScore}',
-        );
+      final verdictUpper = detectionResult.verdict.trim().toUpperCase();
+      final isValidVerdict = verdictUpper == 'REAL' || verdictUpper == 'FAKE';
+
+      if (detectionResult.success && isValidVerdict) {
+        debugPrint('[VoiceDetection] parsed verdict = ${detectionResult.verdict}');
+        debugPrint('[VoiceDetection] fake probability = ${detectionResult.fakeProbability}');
+        debugPrint('[VoiceDetection] bonafide score = ${detectionResult.bonafideScore}');
         _result = detectionResult;
         _status = VoiceAnalysisStatus.success;
       } else {
-        debugPrint('[VoiceDetectionService] AI detection returned success: false');
+        debugPrint('[VoiceDetection] parsed verdict = ${detectionResult.verdict}');
+        debugPrint('[VoiceDetection] fake probability = ${detectionResult.fakeProbability}');
+        debugPrint('[VoiceDetection] bonafide score = ${detectionResult.bonafideScore}');
+        debugPrint('[VoiceDetection] Detection failed: message=${detectionResult.message}');
         _status = VoiceAnalysisStatus.analysisFailed;
         _errorMessage = detectionResult.message ?? 'Voice analysis failed';
       }
     } on SocketException catch (e) {
-      debugPrint('[VoiceDetectionService ERROR] Network socket error: $e');
+      debugPrint('[VoiceDetection] Network socket error: $e');
       _status = VoiceAnalysisStatus.uploadFailed;
       _errorMessage = 'Voice analysis unavailable';
     } on HttpException catch (e) {
-      debugPrint('[VoiceDetectionService ERROR] HTTP error: $e');
+      debugPrint('[VoiceDetection] HTTP error: $e');
       _status = VoiceAnalysisStatus.uploadFailed;
       _errorMessage = 'Voice analysis unavailable';
     } catch (e) {
-      debugPrint('[VoiceDetectionService ERROR] Upload/detection failed: $e');
-      if (e is ApiException && e.statusCode == 200) {
-        _status = VoiceAnalysisStatus.analysisFailed;
-        _errorMessage = 'Voice analysis failed';
-      } else {
-        _status = VoiceAnalysisStatus.uploadFailed;
-        _errorMessage = 'Voice analysis unavailable';
-      }
+      debugPrint('[VoiceDetection] Upload/detection error: $e');
+      _status = VoiceAnalysisStatus.uploadFailed;
+      _errorMessage = 'Voice analysis unavailable';
     } finally {
       _deleteTempFile();
       notifyListeners();

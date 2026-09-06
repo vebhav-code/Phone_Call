@@ -554,9 +554,9 @@ class _InCallScreenState extends State<InCallScreen> {
             color: Colors.black26,
             borderRadius: BorderRadius.circular(16),
           ),
-          child: const Text(
-            'Voice analysis failed',
-            style: TextStyle(
+          child: Text(
+            _voiceDetectionService?.errorMessage ?? 'Voice analysis failed',
+            style: const TextStyle(
               fontSize: 12,
               color: Colors.amber,
             ),
