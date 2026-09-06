@@ -93,7 +93,7 @@ class WebRTCService extends ChangeNotifier {
   }
 
   /// Fetches ICE servers via [ApiService.fetchTurnCredentials] with caching for the [ttl] duration,
-  /// falling back to standard STUN if the request fails.
+  /// falling back to standard STUN if the request fails, times out, or current user ID is unavailable.
   Future<List<Map<String, dynamic>>> _getIceServers() async {
     final now = DateTime.now();
     if (_cachedIceServers != null &&
@@ -105,8 +105,18 @@ class WebRTCService extends ChangeNotifier {
       return _cachedIceServers!;
     }
 
+    final String? userId = _signalingService?.currentUserId;
+    if (userId == null || userId.trim().isEmpty) {
+      debugPrint(
+        '[WebRTCService] Signaling currentUserId is null or empty. Skipping TURN fetch and using fallback STUN.',
+      );
+      return _fallbackIceServers;
+    }
+
     try {
-      final servers = await apiService.fetchTurnCredentials();
+      final servers = await apiService
+          .fetchTurnCredentials(userId.trim())
+          .timeout(const Duration(seconds: 5));
       if (servers.isNotEmpty) {
         final ttlSeconds =
             apiService.lastTurnTtl > 0 ? apiService.lastTurnTtl : 3600;
@@ -117,6 +127,10 @@ class WebRTCService extends ChangeNotifier {
         );
         return servers;
       }
+    } on TimeoutException catch (e) {
+      debugPrint(
+        '[WebRTCService WARN] Timeout fetching TURN credentials after 5s: $e. Falling back to default STUN.',
+      );
     } catch (e) {
       debugPrint(
         '[WebRTCService WARN] Failed to fetch TURN credentials from backend: $e. Falling back to default STUN.',
@@ -199,6 +213,10 @@ class WebRTCService extends ChangeNotifier {
 
     // Fetch dynamic ICE servers (TURN + STUN) before creating peer connection
     final iceServers = await _getIceServers();
+    final bool isTurn = iceServers.length > 1;
+    debugPrint(
+      '[WebRTCService ICE] Resolved ${iceServers.length} ICE server(s) from ${isTurn ? "TURN endpoint" : "STUN fallback"}.',
+    );
     final Map<String, dynamic> iceConfiguration = {
       'iceServers': iceServers,
       'sdpSemantics': 'unified-plan',

@@ -44,13 +44,19 @@ class ApiService {
   /// Cached TTL in seconds from the most recent TURN credentials response.
   int get lastTurnTtl => _lastTurnTtl;
 
-  /// Fetches TURN/STUN credentials and ICE servers from GET /turn-credentials.
+  /// Fetches TURN/STUN credentials and ICE servers from GET /turn-credentials?user_id=[userId].
   /// Returns the parsed iceServers list (`List<Map<String, dynamic>>`).
-  Future<List<Map<String, dynamic>>> fetchTurnCredentials() async {
-    final uri = Uri.parse('$baseUrl/turn-credentials');
+  Future<List<Map<String, dynamic>>> fetchTurnCredentials(String userId) async {
+    final cleanUserId = userId.trim();
+    final uri = Uri.parse('$baseUrl/turn-credentials').replace(
+      queryParameters: {'user_id': cleanUserId},
+    );
     final response = await _client.get(
       uri,
-      headers: {'Accept': 'application/json'},
+      headers: {
+        'Accept': 'application/json',
+        'X-User-Id': cleanUserId,
+      },
     );
 
     if (response.statusCode == 200) {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -73,11 +74,13 @@ void main() {
   });
 
   group('Dynamic ICE Configuration & Caching', () {
-    test('fetches and caches ICE servers for TTL duration', () async {
+    test('fetches and caches ICE servers for TTL duration with user_id', () async {
+      await signalingService.connect('turn-user-1');
       int fetchCount = 0;
       final mockClient = MockClient((request) async {
         if (request.url.path == '/turn-credentials') {
           fetchCount++;
+          expect(request.url.queryParameters['user_id'], 'turn-user-1');
           return http.Response(
             jsonEncode({
               'iceServers': [
@@ -120,7 +123,50 @@ void main() {
       service.dispose();
     });
 
-    test('falls back to default STUN without crashing if fetch fails', () async {
+    test('falls back to STUN-only when currentUserId is null without calling backend', () async {
+      // signalingService is not connected, currentUserId is null
+      expect(signalingService.currentUserId, isNull);
+      int fetchCount = 0;
+      final mockClient = MockClient((request) async {
+        fetchCount++;
+        return http.Response('Should not be called', 500);
+      });
+
+      final apiService = ApiService(client: mockClient);
+      final service = WebRTCService(
+        signalingService: signalingService,
+        apiService: apiService,
+      );
+
+      final servers = await service.getIceServers();
+      expect(fetchCount, 0); // network request skipped
+      expect(servers.length, 1);
+      expect(servers[0]['urls'], 'stun:stun.l.google.com:19302');
+
+      service.dispose();
+    });
+
+    test('respects timeout and falls back to STUN-only rather than hanging', () async {
+      await signalingService.connect('timeout-user');
+      final mockClient = MockClient((request) async {
+        throw TimeoutException('Request timed out after 5s');
+      });
+
+      final apiService = ApiService(client: mockClient);
+      final service = WebRTCService(
+        signalingService: signalingService,
+        apiService: apiService,
+      );
+
+      final servers = await service.getIceServers();
+      expect(servers.length, 1);
+      expect(servers[0]['urls'], 'stun:stun.l.google.com:19302');
+
+      service.dispose();
+    });
+
+    test('falls back to default STUN without crashing if fetch returns error', () async {
+      await signalingService.connect('error-user');
       final mockClient = MockClient((request) async {
         return http.Response(
           jsonEncode({'detail': 'Internal Server Error'}),

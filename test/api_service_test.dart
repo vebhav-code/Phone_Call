@@ -209,10 +209,11 @@ void main() {
       );
     });
 
-    test('fetchTurnCredentials success parses iceServers and ttl', () async {
+    test('fetchTurnCredentials success parses iceServers, ttl, and includes user_id query param', () async {
       final mockClient = MockClient((request) async {
         expect(request.method, 'GET');
         expect(request.url.path, '/turn-credentials');
+        expect(request.url.queryParameters['user_id'], 'test-user-123');
         return http.Response(
           jsonEncode({
             'iceServers': [
@@ -231,7 +232,7 @@ void main() {
       });
 
       final apiService = ApiService(client: mockClient);
-      final iceServers = await apiService.fetchTurnCredentials();
+      final iceServers = await apiService.fetchTurnCredentials('test-user-123');
 
       expect(iceServers.length, 2);
       expect(iceServers[0]['urls'], 'stun:stun.l.google.com:19302');
@@ -250,7 +251,7 @@ void main() {
 
       final apiService = ApiService(client: mockClient);
       expect(
-        () => apiService.fetchTurnCredentials(),
+        () => apiService.fetchTurnCredentials('test-user-123'),
         throwsA(isA<ApiException>().having((e) => e.statusCode, 'statusCode', 500)),
       );
     });
