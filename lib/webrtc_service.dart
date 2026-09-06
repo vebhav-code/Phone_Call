@@ -181,9 +181,30 @@ class WebRTCService extends ChangeNotifier {
     }
   }
 
-  /// Initiates an audio call as the caller (creates and sends the SDP offer immediately).
+  /// Initiates an audio call as the caller.
+  /// Prepares local media and peer connection, and sends the SDP offer once
+  /// [SignalingService] confirms the call is accepted (`CallLifecycleState.inCall`).
   Future<void> startAsCaller(String callId) async {
     await _initCall(callId: callId, isCaller: true);
+
+    // If SignalingService is not yet in inCall state, await confirmation before sending SDP offer
+    if (_signalingService != null &&
+        _signalingService!.callState != CallLifecycleState.inCall) {
+      debugPrint(
+        '[WebRTCService] Call is in state "${_signalingService!.callState}". Waiting for "call_accepted" (inCall) before sending SDP offer...',
+      );
+      try {
+        await _signalingService!.callStateStream
+            .firstWhere((state) => state == CallLifecycleState.inCall)
+            .timeout(const Duration(seconds: 15));
+      } catch (e) {
+        debugPrint(
+          '[WebRTCService ERROR] Timed out or failed waiting for call acceptance: $e',
+        );
+        return;
+      }
+    }
+
     await _createAndSendOffer();
   }
 
@@ -213,9 +234,15 @@ class WebRTCService extends ChangeNotifier {
 
     // Fetch dynamic ICE servers (TURN + STUN) before creating peer connection
     final iceServers = await _getIceServers();
-    final bool isTurn = iceServers.length > 1;
+    final bool hasTurn = iceServers.any((server) {
+      final dynamic urls = server['urls'];
+      if (urls is String) return urls.startsWith('turn:') || urls.startsWith('turns:');
+      if (urls is List) return urls.any((u) => u.toString().startsWith('turn:') || u.toString().startsWith('turns:'));
+      return false;
+    });
+    final serverUrls = iceServers.map((s) => s['urls']).toList();
     debugPrint(
-      '[WebRTCService ICE] Resolved ${iceServers.length} ICE server(s) from ${isTurn ? "TURN endpoint" : "STUN fallback"}.',
+      '[WebRTCService ICE] Resolved ${iceServers.length} ICE server(s) [${hasTurn ? "TURN + STUN" : "STUN only"}]: $serverUrls',
     );
     final Map<String, dynamic> iceConfiguration = {
       'iceServers': iceServers,

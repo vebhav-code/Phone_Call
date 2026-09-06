@@ -61,12 +61,16 @@ class SignalingService extends ChangeNotifier {
 
   final String wsBaseUrl;
   final WebSocketChannelFactory _channelFactory;
+  final bool enableHeartbeat;
 
   // Connection state
   WebSocketChannel? _channel;
   StreamSubscription? _wsSubscription;
   bool _isConnected = false;
   String? _currentUserId;
+  Timer? _heartbeatTimer;
+  Timer? _reconnectTimer;
+  bool _isExplicitDisconnect = false;
 
   // Call lifecycle state
   CallLifecycleState _callState = CallLifecycleState.idle;
@@ -91,6 +95,7 @@ class SignalingService extends ChangeNotifier {
   SignalingService({
     this.wsBaseUrl = defaultWsBaseUrl,
     WebSocketChannelFactory? channelFactory,
+    this.enableHeartbeat = true,
   }) : _channelFactory = channelFactory ?? WebSocketChannel.connect;
 
   // Public getters
@@ -107,10 +112,20 @@ class SignalingService extends ChangeNotifier {
   Stream<CallLifecycleState> get callStateStream =>
       _callStateController.stream;
 
+  @visibleForTesting
+  Timer? get heartbeatTimer => _heartbeatTimer;
+
+  @visibleForTesting
+  Timer? get reconnectTimer => _reconnectTimer;
+
   /// Opens the persistent WebSocket connection for [userId].
   Future<void> connect(String userId) async {
     final cleanUserId = userId.trim();
     if (cleanUserId.isEmpty) return;
+
+    _isExplicitDisconnect = false;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
 
     if (_isConnected && _currentUserId == cleanUserId) {
       debugPrint('[SignalingService] Already connected as $cleanUserId');
@@ -118,7 +133,7 @@ class SignalingService extends ChangeNotifier {
     }
 
     // Disconnect any previous connection
-    disconnect();
+    _disconnectInternal();
 
     _currentUserId = cleanUserId;
     final uri = Uri.parse('$wsBaseUrl/$cleanUserId');
@@ -128,6 +143,8 @@ class SignalingService extends ChangeNotifier {
       _channel = _channelFactory(uri);
       _isConnected = true;
       notifyListeners();
+
+      _startHeartbeat();
 
       _wsSubscription = _channel!.stream.listen(
         _handleIncomingMessage,
@@ -146,8 +163,16 @@ class SignalingService extends ChangeNotifier {
     }
   }
 
-  /// Closes the persistent WebSocket connection.
+  /// Closes the persistent WebSocket connection explicitly.
   void disconnect() {
+    _isExplicitDisconnect = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _disconnectInternal();
+  }
+
+  void _disconnectInternal() {
+    _stopHeartbeat();
     _wsSubscription?.cancel();
     _wsSubscription = null;
 
@@ -159,6 +184,48 @@ class SignalingService extends ChangeNotifier {
     }
 
     _handleDisconnect();
+  }
+
+  void _startHeartbeat() {
+    if (!enableHeartbeat) return;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+      if (_isConnected && _channel != null) {
+        debugPrint('[SignalingService HEARTBEAT] Sending ping');
+        _sendSignalingMessage({'type': 'ping'});
+      }
+    });
+  }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+  }
+
+  void _scheduleReconnect() {
+    if (_isExplicitDisconnect) return;
+    if (_reconnectTimer?.isActive ?? false) return;
+    if (_callState != CallLifecycleState.idle &&
+        _callState != CallLifecycleState.ended &&
+        _callState != CallLifecycleState.failed) {
+      debugPrint(
+        '[SignalingService] Socket dropped while in active call (state: $_callState). Auto-reconnect suppressed.',
+      );
+      return;
+    }
+    if (_currentUserId == null || _currentUserId!.isEmpty) return;
+
+    final targetUserId = _currentUserId!;
+    debugPrint(
+      '[SignalingService] Scheduling auto-reconnect in 3s for user $targetUserId...',
+    );
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(const Duration(seconds: 3), () async {
+      if (!_isConnected && !_isExplicitDisconnect && _currentUserId == targetUserId) {
+        debugPrint('[SignalingService] Auto-reconnecting as $targetUserId...');
+        await connect(targetUserId);
+      }
+    });
   }
 
   /// Initiates an outgoing call to [contactUserId].
@@ -246,16 +313,33 @@ class SignalingService extends ChangeNotifier {
   }
 
   /// Forwards raw offer, answer, or ice_candidate payloads OUT to the remote peer.
-  /// Automatically injects [to_user_id] and [call_id] if omitted.
+  /// Automatically injects [to_user_id] and [call_id] if omitted, validating both before sending.
   void sendSignalingPayload(Map<String, dynamic> payload) {
     final Map<String, dynamic> message = Map<String, dynamic>.from(payload);
 
-    if (!message.containsKey('to_user_id') && _currentPartnerId != null) {
-      message['to_user_id'] = _currentPartnerId;
+    final String? toUserId =
+        (message['to_user_id'] ?? _currentPartnerId)?.toString();
+    final String? callId =
+        (message['call_id'] ?? _currentCallId)?.toString();
+
+    if (toUserId == null || toUserId.trim().isEmpty) {
+      final errorMsg =
+          '[SignalingService ERROR] Cannot forward signaling payload "${message['type']}": "to_user_id" is null or empty (payload: $payload, currentPartnerId: $_currentPartnerId). Silent message loss prevented.';
+      debugPrint(errorMsg);
+      assert(false, errorMsg);
+      return;
     }
-    if (!message.containsKey('call_id') && _currentCallId != null) {
-      message['call_id'] = _currentCallId;
+
+    if (callId == null || callId.trim().isEmpty) {
+      final errorMsg =
+          '[SignalingService ERROR] Cannot forward signaling payload "${message['type']}": "call_id" is null or empty (payload: $payload, currentCallId: $_currentCallId). Silent message loss prevented.';
+      debugPrint(errorMsg);
+      assert(false, errorMsg);
+      return;
     }
+
+    message['to_user_id'] = toUserId.trim();
+    message['call_id'] = callId.trim();
 
     _sendSignalingMessage(message);
   }
@@ -396,6 +480,7 @@ class SignalingService extends ChangeNotifier {
   }
 
   void _handleDisconnect() {
+    _stopHeartbeat();
     _isConnected = false;
     notifyListeners();
 
@@ -405,6 +490,10 @@ class SignalingService extends ChangeNotifier {
         const CallFailedException('WebSocket disconnected'),
       );
       _pendingCallCompleter = null;
+    }
+
+    if (!_isExplicitDisconnect) {
+      _scheduleReconnect();
     }
   }
 
@@ -419,6 +508,10 @@ class SignalingService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _isExplicitDisconnect = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _stopHeartbeat();
     disconnect();
     _incomingCallController.close();
     _signalingPayloadController.close();

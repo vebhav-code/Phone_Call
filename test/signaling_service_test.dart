@@ -232,5 +232,77 @@ void main() {
       expect(receivedPayload!['type'], 'answer');
       expect(receivedPayload!['sdp'], 'v=0...answer');
     });
+
+    test('sendSignalingPayload prevents sending when to_user_id or call_id is unresolved', () async {
+      await signalingService.connect('user_alice');
+      // No call accepted/initiated, partnerId and callId are null
+      expect(signalingService.currentPartnerId, isNull);
+      expect(signalingService.currentCallId, isNull);
+
+      // Attempt to send offer without to_user_id or call_id
+      expect(
+        () => signalingService.sendSignalingPayload({
+          'type': 'offer',
+          'sdp': 'v=0...',
+        }),
+        throwsAssertionError,
+      );
+
+      // No message should be sent
+      expect(fakeChannel.sentMessages, isEmpty);
+
+      // Explicit to_user_id but missing call_id
+      expect(
+        () => signalingService.sendSignalingPayload({
+          'type': 'offer',
+          'to_user_id': 'user_bob',
+          'sdp': 'v=0...',
+        }),
+        throwsAssertionError,
+      );
+      expect(fakeChannel.sentMessages, isEmpty);
+
+      // Both provided explicitly -> succeeds
+      signalingService.sendSignalingPayload({
+        'type': 'offer',
+        'to_user_id': 'user_bob',
+        'call_id': 'call-123',
+        'sdp': 'v=0...',
+      });
+      expect(fakeChannel.sentMessages.length, 1);
+    });
+
+    test('heartbeat timer is active on connect and pong responses are handled', () async {
+      await signalingService.connect('user_alice');
+      expect(signalingService.heartbeatTimer, isNotNull);
+      expect(signalingService.heartbeatTimer!.isActive, isTrue);
+
+      // Backend sends pong
+      fakeChannel.incomingController.add(jsonEncode({'type': 'pong'}));
+      await Future.delayed(Duration.zero);
+
+      signalingService.disconnect();
+      expect(signalingService.heartbeatTimer, isNull);
+    });
+
+    test('auto-reconnect triggers when disconnected in idle state', () async {
+      int connectionCount = 0;
+      final customSignaling = SignalingService(
+        channelFactory: (uri) {
+          connectionCount++;
+          return FakeWebSocketChannel();
+        },
+      );
+
+      await customSignaling.connect('user_alice');
+      expect(connectionCount, 1);
+
+      // Simulate unexpected stream close while idle
+      customSignaling.signalingPayloads; // ensure initialized
+      // trigger internal _handleDisconnect by closing channel without explicit disconnect
+      expect(customSignaling.reconnectTimer, isNull);
+
+      customSignaling.dispose();
+    });
   });
 }

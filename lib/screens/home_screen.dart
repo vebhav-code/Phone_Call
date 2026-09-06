@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart' show ChangeNotifierProvider;
 import '../models/contact_model.dart';
 import '../services/api_service.dart';
 import '../services/signaling_service.dart';
@@ -31,17 +32,17 @@ class _HomeScreenState extends State<HomeScreen> {
   late final ApiService _apiService;
   SignalingService? _signalingService;
   WebRTCService? _webrtcService;
-
-  String _currentUserId = '';
-  String _currentUserName = '';
-  String _currentUsername = '';
+  StreamSubscription? _incomingCallSubscription;
 
   List<ContactModel> _contacts = [];
   bool _isLoading = true;
   String? _errorMessage;
   String? _callingContactUserId;
 
-  StreamSubscription<IncomingCall>? _incomingCallSubscription;
+  // Current authenticated user info
+  String _currentUserId = '';
+  String _currentUserName = '';
+  String _currentUsername = '';
 
   @override
   void initState() {
@@ -53,7 +54,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _initialize() async {
+    _signalingService ??=
+        ChangeNotifierProvider.maybeOf<SignalingService>(context, listen: false) ??
+        SignalingService();
+    _webrtcService ??=
+        ChangeNotifierProvider.maybeOf<WebRTCService>(context, listen: false) ??
+        WebRTCService(signalingService: _signalingService);
+
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+
     final userId = prefs.getString('user_id') ?? '';
     final userName = prefs.getString('user_name') ?? '';
     final username = prefs.getString('username') ?? '';
@@ -65,8 +75,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     if (userId.isNotEmpty) {
-      // Connect signaling if not provided via constructor or not connected
-      _signalingService ??= SignalingService();
       if (!_signalingService!.isConnected) {
         await _signalingService!.connect(userId);
       }
@@ -83,6 +91,11 @@ class _HomeScreenState extends State<HomeScreen> {
       _incomingCallSubscription =
           _signalingService!.incomingCalls.listen((call) {
         if (!mounted) return;
+
+        _webrtcService ??=
+            ChangeNotifierProvider.maybeOf<WebRTCService>(context, listen: false) ??
+            WebRTCService(signalingService: _signalingService);
+
         // Navigate to IncomingCallScreen regardless of what screen is currently showing
         Navigator.of(context, rootNavigator: true).push(
           MaterialPageRoute(
@@ -136,6 +149,10 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final callId = await _signalingService!.callUser(contact.contactUserId);
       if (!mounted) return;
+
+      _webrtcService ??=
+          ChangeNotifierProvider.maybeOf<WebRTCService>(context, listen: false) ??
+          WebRTCService(signalingService: _signalingService);
 
       // Navigate to OutgoingCallScreen on call accepted
       Navigator.of(context, rootNavigator: true).push(
@@ -215,6 +232,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _incomingCallSubscription?.cancel();
+    _signalingService?.disconnect();
     if (widget.apiService == null) {
       _apiService.dispose();
     }
@@ -381,3 +399,5 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+
+

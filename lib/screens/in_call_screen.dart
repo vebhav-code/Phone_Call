@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../main.dart' show ChangeNotifierProvider;
 import '../services/signaling_service.dart';
 import '../webrtc_service.dart';
 
@@ -43,8 +44,11 @@ class _InCallScreenState extends State<InCallScreen> {
   @override
   void initState() {
     super.initState();
-    _webrtc = widget.webrtcService ?? WebRTCService();
-    _signaling = widget.signalingService;
+    _signaling = widget.signalingService ??
+        ChangeNotifierProvider.maybeOf<SignalingService>(context, listen: false);
+    _webrtc = widget.webrtcService ??
+        ChangeNotifierProvider.maybeOf<WebRTCService>(context, listen: false) ??
+        WebRTCService(signalingService: _signaling);
 
     // Default initial displayed status to Connecting... when entered via active call flow
     _displayState = _webrtc.callState == CallState.connected

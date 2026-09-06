@@ -25,6 +25,7 @@ void main() {
     fakeChannel = FakeWebSocketChannel();
     signalingService = SignalingService(
       channelFactory: (uri) => fakeChannel,
+      enableHeartbeat: false,
     );
     webrtcService = WebRTCService(signalingService: signalingService);
   });

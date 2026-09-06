@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../main.dart' show ChangeNotifierProvider;
 import '../services/signaling_service.dart';
 import '../webrtc_service.dart';
 import 'in_call_screen.dart';
@@ -38,8 +39,10 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen>
   @override
   void initState() {
     super.initState();
-    _signaling = widget.signalingService;
-    _webrtc = widget.webrtcService;
+    _signaling = widget.signalingService ??
+        ChangeNotifierProvider.maybeOf<SignalingService>(context, listen: false);
+    _webrtc = widget.webrtcService ??
+        ChangeNotifierProvider.maybeOf<WebRTCService>(context, listen: false);
 
     _pulseController = AnimationController(
       vsync: this,

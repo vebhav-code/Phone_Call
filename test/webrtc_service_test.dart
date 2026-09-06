@@ -20,7 +20,24 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
       const MethodChannel('FlutterWebRTC.Method'),
-      (MethodCall call) async => null,
+      (MethodCall call) async {
+        switch (call.method) {
+          case 'getUserMedia':
+            return {'streamId': 'mock-stream', 'tracks': []};
+          case 'createPeerConnection':
+            return {'peerConnectionId': 'mock-pc'};
+          case 'createOffer':
+            return {'sdp': 'v=0...mock-offer', 'type': 'offer'};
+          case 'setLocalDescription':
+          case 'setRemoteDescription':
+          case 'addTrack':
+          case 'peerConnectionClose':
+          case 'streamDispose':
+            return null;
+          default:
+            return null;
+        }
+      },
     );
 
     fakeChannel = FakeWebSocketChannel();
@@ -225,6 +242,27 @@ void main() {
       // Second failure when restart was already attempted
       webrtcService.handleIceFailureOrTimeout();
       expect(webrtcService.callState, CallState.disconnected);
+    });
+  });
+
+  group('Caller SDP Offer Timing', () {
+    test('startAsCaller sends offer immediately when SignalingService is already inCall', () async {
+      await signalingService.connect('alice');
+      // Simulate call already accepted
+      signalingService.acceptCall('call-777', 'bob');
+      expect(signalingService.callState, CallLifecycleState.inCall);
+
+      // Start as caller
+      await webrtcService.startAsCaller('call-777');
+
+      // Check offer sent
+      expect(
+        fakeChannel.sentMessages.any((m) =>
+            m.contains('offer') &&
+            m.contains('call-777') &&
+            m.contains('bob')),
+        isTrue,
+      );
     });
   });
 }
