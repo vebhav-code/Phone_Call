@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../config.dart';
 import '../models/contact_model.dart';
 import '../models/user_model.dart';
 
@@ -29,58 +30,14 @@ class ContactAlreadyAddedException extends ApiException {
 /// Service providing REST API access to user registration, user search,
 /// and contact management endpoints on the signaling backend.
 class ApiService {
-  static const String defaultBaseUrl =
-      'https://calling-backend-1jxa.onrender.com';
-
   final String baseUrl;
   final http.Client _client;
-  int _lastTurnTtl = 3600;
-  bool? _lastTurnConfigured;
 
   ApiService({
-    this.baseUrl = defaultBaseUrl,
+    String? baseUrl,
     http.Client? client,
-  }) : _client = client ?? http.Client();
-
-  /// Cached TTL in seconds from the most recent TURN credentials response.
-  int get lastTurnTtl => _lastTurnTtl;
-
-  /// Whether the backend indicated TURN is configured ("turnConfigured" field).
-  bool? get lastTurnConfigured => _lastTurnConfigured;
-
-  /// Fetches TURN/STUN credentials and ICE servers from GET /turn-credentials?user_id=[userId].
-  /// Returns the parsed iceServers list (`List<Map<String, dynamic>>`).
-  Future<List<Map<String, dynamic>>> fetchTurnCredentials(String userId) async {
-    final cleanUserId = userId.trim();
-    final uri = Uri.parse('$baseUrl/turn-credentials').replace(
-      queryParameters: {'user_id': cleanUserId},
-    );
-    final response = await _client.get(
-      uri,
-      headers: {
-        'Accept': 'application/json',
-        'X-User-Id': cleanUserId,
-      },
-    );
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final rawList = data['iceServers'] as List<dynamic>? ?? [];
-      final ttl = data['ttl'] as int?;
-      if (ttl != null && ttl > 0) {
-        _lastTurnTtl = ttl;
-      }
-      _lastTurnConfigured = data['turnConfigured'] as bool?;
-      return rawList
-          .map((item) => Map<String, dynamic>.from(item as Map))
-          .toList();
-    } else {
-      throw ApiException(
-        _parseErrorMessage(response),
-        statusCode: response.statusCode,
-      );
-    }
-  }
+  })  : baseUrl = baseUrl ?? AppConfig.baseUrl,
+        _client = client ?? http.Client();
 
   /// Registers a new user with a display name and unique username.
   /// Throws [UsernameTakenException] if HTTP 409 Conflict is returned.

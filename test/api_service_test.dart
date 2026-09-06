@@ -208,52 +208,5 @@ void main() {
         throwsA(isA<ApiException>().having((e) => e.statusCode, 'statusCode', 404)),
       );
     });
-
-    test('fetchTurnCredentials success parses iceServers, ttl, and includes user_id query param', () async {
-      final mockClient = MockClient((request) async {
-        expect(request.method, 'GET');
-        expect(request.url.path, '/turn-credentials');
-        expect(request.url.queryParameters['user_id'], 'test-user-123');
-        return http.Response(
-          jsonEncode({
-            'iceServers': [
-              {'urls': 'stun:stun.l.google.com:19302'},
-              {
-                'urls': ['turn:turn.example.com:3478?transport=udp'],
-                'username': 'test-user',
-                'credential': 'test-password',
-              },
-            ],
-            'ttl': 7200,
-          }),
-          200,
-          headers: {'content-type': 'application/json'},
-        );
-      });
-
-      final apiService = ApiService(client: mockClient);
-      final iceServers = await apiService.fetchTurnCredentials('test-user-123');
-
-      expect(iceServers.length, 2);
-      expect(iceServers[0]['urls'], 'stun:stun.l.google.com:19302');
-      expect(iceServers[1]['username'], 'test-user');
-      expect(apiService.lastTurnTtl, 7200);
-    });
-
-    test('fetchTurnCredentials error throws ApiException', () async {
-      final mockClient = MockClient((request) async {
-        return http.Response(
-          jsonEncode({'detail': 'Internal server error'}),
-          500,
-          headers: {'content-type': 'application/json'},
-        );
-      });
-
-      final apiService = ApiService(client: mockClient);
-      expect(
-        () => apiService.fetchTurnCredentials('test-user-123'),
-        throwsA(isA<ApiException>().having((e) => e.statusCode, 'statusCode', 500)),
-      );
-    });
   });
 }

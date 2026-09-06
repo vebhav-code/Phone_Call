@@ -6,6 +6,7 @@ import 'screens/in_call_screen.dart';
 import 'screens/incoming_call_screen.dart';
 import 'screens/outgoing_call_screen.dart';
 import 'screens/registration_screen.dart';
+import 'services/call_controller.dart';
 import 'services/signaling_service.dart';
 import 'webrtc_service.dart';
 
@@ -21,14 +22,21 @@ void main() async {
   if (hasUser) {
     signalingService.connect(userId);
   }
-  final webrtcService = WebRTCService(signalingService: signalingService);
+  final webrtcService = WebRTCService();
+  final callController = CallController(
+    signalingService: signalingService,
+    webrtcService: webrtcService,
+  );
 
   runApp(
     ChangeNotifierProvider<SignalingService>(
       create: (_) => signalingService,
       child: ChangeNotifierProvider<WebRTCService>(
         create: (_) => webrtcService,
-        child: AudioCallApp(initialHasUser: hasUser),
+        child: ChangeNotifierProvider<CallController>(
+          create: (_) => callController,
+          child: AudioCallApp(initialHasUser: hasUser),
+        ),
       ),
     ),
   );
@@ -76,11 +84,7 @@ class AppRoutes {
     RouteSettings settings,
     BuildContext context,
   ) {
-    final signaling = ChangeNotifierProvider.maybeOf<SignalingService>(
-      context,
-      listen: false,
-    );
-    final webrtc = ChangeNotifierProvider.maybeOf<WebRTCService>(
+    final callController = ChangeNotifierProvider.maybeOf<CallController>(
       context,
       listen: false,
     );
@@ -96,8 +100,7 @@ class AppRoutes {
         return MaterialPageRoute(
           settings: settings,
           builder: (_) => HomeScreen(
-            signalingService: signaling,
-            webrtcService: webrtc,
+            callController: callController,
           ),
         );
 
@@ -113,10 +116,9 @@ class AppRoutes {
           settings: settings,
           builder: (_) => OutgoingCallScreen(
             contactName: args['contactName'] as String? ?? 'Contact',
-            callId: args['callId'] as String? ?? '',
             otherUserId: args['otherUserId'] as String?,
-            signalingService: signaling,
-            webrtcService: webrtc,
+            callId: args['callId'] as String?,
+            callController: callController,
           ),
         );
 
@@ -128,8 +130,7 @@ class AppRoutes {
             callerName: args['callerName'] as String? ?? 'Unknown Caller',
             callerId: args['callerId'] as String? ?? '',
             callId: args['callId'] as String? ?? '',
-            signalingService: signaling,
-            webrtcService: webrtc,
+            callController: callController,
           ),
         );
 
@@ -141,8 +142,7 @@ class AppRoutes {
             otherUserName: args['otherUserName'] as String? ?? 'Call',
             callId: args['callId'] as String? ?? '',
             otherUserId: args['otherUserId'] as String?,
-            signalingService: signaling,
-            webrtcService: webrtc,
+            callController: callController,
           ),
         );
 
@@ -174,8 +174,7 @@ class AudioCallApp extends StatelessWidget {
   }
 }
 
-/// A lightweight ChangeNotifierProvider implementation to inject and access
-/// dependencies in the widget tree using standard Flutter primitives (InheritedNotifier).
+/// A lightweight ChangeNotifierProvider implementation using InheritedNotifier.
 class ChangeNotifierProvider<T extends ChangeNotifier> extends StatefulWidget {
   final T Function(BuildContext context) create;
   final Widget child;
@@ -186,8 +185,6 @@ class ChangeNotifierProvider<T extends ChangeNotifier> extends StatefulWidget {
     required this.child,
   });
 
-  /// Obtains the [T] instance from the closest [ChangeNotifierProvider] ancestor,
-  /// throwing an assertion error if none is found.
   static T of<T extends ChangeNotifier>(
     BuildContext context, {
     bool listen = true,
@@ -208,8 +205,6 @@ class ChangeNotifierProvider<T extends ChangeNotifier> extends StatefulWidget {
     }
   }
 
-  /// Safely obtains the [T] instance from the closest [ChangeNotifierProvider] ancestor,
-  /// returning null if none is found.
   static T? maybeOf<T extends ChangeNotifier>(
     BuildContext context, {
     bool listen = true,

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -9,14 +10,35 @@ import 'package:audio_call_app/screens/home_screen.dart';
 import 'package:audio_call_app/screens/incoming_call_screen.dart';
 import 'package:audio_call_app/screens/outgoing_call_screen.dart';
 import 'package:audio_call_app/services/api_service.dart';
+import 'package:audio_call_app/services/call_controller.dart';
 import 'package:audio_call_app/services/signaling_service.dart';
+import 'package:audio_call_app/webrtc_service.dart';
 import 'signaling_service_test.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   late FakeWebSocketChannel fakeChannel;
   late SignalingService signalingService;
+  late WebRTCService webrtcService;
+  late CallController callController;
 
   setUp(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('FlutterWebRTC.Method'),
+      (MethodCall call) async {
+        switch (call.method) {
+          case 'getUserMedia':
+            return {'streamId': 'mock-stream', 'tracks': []};
+          case 'createPeerConnection':
+            return {'peerConnectionId': 'mock-pc'};
+          default:
+            return null;
+        }
+      },
+    );
+
     SharedPreferences.setMockInitialValues({
       'user_id': 'alice_123',
       'user_name': 'Alice Wonderland',
@@ -26,10 +48,19 @@ void main() {
     fakeChannel = FakeWebSocketChannel();
     signalingService = SignalingService(
       channelFactory: (uri) => fakeChannel,
+      enableHeartbeat: false,
+    );
+    webrtcService = WebRTCService();
+    callController = CallController(
+      signalingService: signalingService,
+      webrtcService: webrtcService,
     );
   });
 
-  tearDown(() {
+  tearDown(() async {
+    await callController.endCall();
+    callController.dispose();
+    webrtcService.dispose();
     signalingService.dispose();
   });
 
@@ -54,7 +85,6 @@ void main() {
               'contact_id': 'charlie_789',
               'name': 'Charlie Chaplin',
               'username': 'charlie',
-              // is_online is omitted/null -> presence dot should be omitted
             },
           ]),
           200,
@@ -69,6 +99,8 @@ void main() {
           home: HomeScreen(
             apiService: apiService,
             signalingService: signalingService,
+            webrtcService: webrtcService,
+            callController: callController,
           ),
         ),
       );
@@ -98,6 +130,8 @@ void main() {
           home: HomeScreen(
             apiService: apiService,
             signalingService: signalingService,
+            webrtcService: webrtcService,
+            callController: callController,
           ),
         ),
       );
@@ -110,7 +144,7 @@ void main() {
     });
 
     testWidgets(
-        'tapping call button calls callUser and navigates to OutgoingCallScreen',
+        'tapping call button sends call_request without call_id and navigates to OutgoingCallScreen',
         (WidgetTester tester) async {
       final mockClient = MockClient((request) async {
         return http.Response(
@@ -135,6 +169,8 @@ void main() {
           home: HomeScreen(
             apiService: apiService,
             signalingService: signalingService,
+            webrtcService: webrtcService,
+            callController: callController,
           ),
         ),
       );
@@ -143,30 +179,23 @@ void main() {
       // Tap call button
       await tester.tap(find.byKey(const Key('call_btn_bob_456')));
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
-      // Check outgoing call_request was sent over websocket
+      // Check outgoing call_request was sent over websocket WITHOUT call_id
       expect(fakeChannel.sentMessages.length, 1);
       final sent =
           jsonDecode(fakeChannel.sentMessages.first) as Map<String, dynamic>;
       expect(sent['type'], 'call_request');
       expect(sent['to_user_id'], 'bob_456');
+      expect(sent.containsKey('call_id'), isFalse);
 
-      // Callee accepts the call
-      fakeChannel.incomingController.add(jsonEncode({
-        'type': 'call_accepted',
-        'call_id': 'call-session-999',
-      }));
-
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-
-      // Navigates to OutgoingCallScreen passing name and call_id
+      // Navigates to OutgoingCallScreen
       expect(find.byType(OutgoingCallScreen), findsOneWidget);
       expect(find.text('Calling Bob Builder...'), findsOneWidget);
     });
 
     testWidgets(
-        'listens for incoming_call and navigates to IncomingCallScreen regardless of current screen',
+        'listens for incoming_call and navigates to IncomingCallScreen',
         (WidgetTester tester) async {
       final mockClient = MockClient((request) async {
         return http.Response(jsonEncode([]), 200,
@@ -180,15 +209,12 @@ void main() {
           home: HomeScreen(
             apiService: apiService,
             signalingService: signalingService,
+            webrtcService: webrtcService,
+            callController: callController,
           ),
         ),
       );
       await tester.pumpAndSettle();
-
-      // First navigate away to AddContactScreen
-      await tester.tap(find.byKey(const Key('add_contact_fab')));
-      await tester.pumpAndSettle();
-      expect(find.byType(AddContactScreen), findsOneWidget);
 
       // Incoming call arrives over WebSocket
       fakeChannel.incomingController.add(jsonEncode({
@@ -199,10 +225,10 @@ void main() {
       }));
 
       await tester.pump();
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump(const Duration(milliseconds: 350));
 
-      // IncomingCallScreen is pushed on top regardless of AddContactScreen being active
+      // IncomingCallScreen is pushed
       expect(find.byType(IncomingCallScreen), findsOneWidget);
       expect(find.text('Dave Grohl is calling...'), findsOneWidget);
       expect(find.text('Incoming Audio Call'), findsOneWidget);

@@ -15,18 +15,10 @@
     <!-- Android 12 (API 31)+ Bluetooth permission -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- Foreground Service permissions for persistent background audio calls -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <!-- Android 14 (API 34)+ foreground service type permissions -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
-
-    <!-- Hardware feature declarations (prevent Google Play from filtering out devices lacking optional hardware) -->
+    <!-- Hardware feature declarations -->
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
     <uses-feature android:name="android.hardware.audio.low_latency" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <application
         android:label="audio_call_app"

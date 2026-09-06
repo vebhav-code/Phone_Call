@@ -1,16 +1,14 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../main.dart' show ChangeNotifierProvider;
-import '../services/signaling_service.dart';
-import '../webrtc_service.dart';
+import '../services/call_controller.dart';
 
 /// Screen displayed during an active 1-to-1 audio call.
 class InCallScreen extends StatefulWidget {
   final String otherUserName;
   final String callId;
   final String? otherUserId;
-  final SignalingService? signalingService;
-  final WebRTCService? webrtcService;
+  final CallController? callController;
   final VoidCallback? onEndCall;
 
   const InCallScreen({
@@ -18,8 +16,7 @@ class InCallScreen extends StatefulWidget {
     required this.otherUserName,
     required this.callId,
     this.otherUserId,
-    this.signalingService,
-    this.webrtcService,
+    this.callController,
     this.onEndCall,
   });
 
@@ -28,63 +25,47 @@ class InCallScreen extends StatefulWidget {
 }
 
 class _InCallScreenState extends State<InCallScreen> {
-  late final WebRTCService _webrtc;
-  SignalingService? _signaling;
-  late CallState _displayState;
+  CallController? _callController;
 
-  // Call duration timer
+  // Call duration stopwatch
   final Stopwatch _stopwatch = Stopwatch();
   Timer? _durationTimer;
   Duration _callDuration = Duration.zero;
 
-  // Subscriptions
-  StreamSubscription<CallLifecycleState>? _signalingSubscription;
-  VoidCallback? _webrtcListener;
+  bool _isEndingCall = false;
 
   @override
   void initState() {
     super.initState();
-    _signaling = widget.signalingService ??
-        ChangeNotifierProvider.maybeOf<SignalingService>(context, listen: false);
-    _webrtc = widget.webrtcService ??
-        ChangeNotifierProvider.maybeOf<WebRTCService>(context, listen: false) ??
-        WebRTCService(signalingService: _signaling);
-
-    // Default initial displayed status to Connecting... when entered via active call flow
-    // unless already connected or in an explicit ICE failure
-    _displayState = (_webrtc.callState == CallState.connected || _webrtc.isIceFailure)
-        ? _webrtc.callState
-        : CallState.connecting;
-
-    // Listen to WebRTC connection state to start duration timer
-    _webrtcListener = _handleWebRTCStateChange;
-    _webrtc.addListener(_webrtcListener!);
-
-    // Start timer immediately if already connected
-    if (_webrtc.callState == CallState.connected) {
+    _callController = widget.callController;
+    _callController?.addListener(_handleControllerStateChange);
+    if (_callController?.state == CallState.connected) {
       _startTimer();
     }
 
-    // Listen for peer-initiated call termination from SignalingService
-    if (_signaling != null) {
-      _signalingSubscription = _signaling!.callStateStream.listen((state) {
-        if (state == CallLifecycleState.ended ||
-            state == CallLifecycleState.failed) {
-          _handlePeerEndedCall();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_callController == null && mounted) {
+        _callController = ChangeNotifierProvider.maybeOf<CallController>(context, listen: false);
+        _callController?.addListener(_handleControllerStateChange);
+
+        if (_callController?.state == CallState.connected) {
+          _startTimer();
         }
-      });
-    }
+      }
+    });
   }
 
-  void _handleWebRTCStateChange() {
-    _displayState = _webrtc.callState;
-    if (_webrtc.callState == CallState.connected && !_stopwatch.isRunning) {
+  void _handleControllerStateChange() {
+    if (!mounted || _isEndingCall || _callController == null) return;
+
+    final state = _callController!.state;
+    if (state == CallState.connected && !_stopwatch.isRunning) {
       _startTimer();
-    } else if (_webrtc.callState == CallState.disconnected ||
-        _webrtc.callState == CallState.peerDisconnected) {
+    } else if (state == CallState.ended || state == CallState.idle) {
       _stopTimer();
+      _handleCallEnded();
     }
-    if (mounted) setState(() {});
+    setState(() {});
   }
 
   void _startTimer() {
@@ -115,70 +96,32 @@ class _InCallScreenState extends State<InCallScreen> {
     return '$minutes:$seconds';
   }
 
-  String _formatCallState(CallState state) {
-    switch (state) {
-      case CallState.connecting:
-        return 'Connecting...';
-      case CallState.connected:
-        return 'Connected (${_formatDuration(_callDuration)})';
-      case CallState.peerDisconnected:
-        return 'Peer Disconnected';
-      case CallState.roomFull:
-        return 'Room Full';
-      case CallState.disconnected:
-        if (!_webrtc.lastCallUsedTurn) {
-          return 'Call failed — no relay server available, this usually means the two devices are on different networks and TURN isn\'t configured';
-        }
-        if (_webrtc.isIceFailure) {
-          return 'Call failed — check your network connection';
-        }
-        return 'Disconnected';
-    }
-  }
-
-  Color _statusColor(CallState state) {
-    switch (state) {
-      case CallState.connected:
-        return Colors.green;
-      case CallState.connecting:
-        return Colors.amber;
-      case CallState.peerDisconnected:
-      case CallState.roomFull:
-      case CallState.disconnected:
-        return Colors.red;
-    }
-  }
-
   Future<void> _handleEndCall() async {
+    if (_isEndingCall) return;
+    setState(() {
+      _isEndingCall = true;
+    });
+
     _stopTimer();
-
-    // 1. Send call_ended via SignalingService
-    if (widget.otherUserId != null && widget.otherUserId!.isNotEmpty) {
-      _signaling?.endCall(widget.callId, widget.otherUserId!);
-    }
-
-    // 2. Tear down WebRTC session
-    await _webrtc.endCall();
+    await _callController?.endCall();
 
     if (!mounted) return;
-
     if (widget.onEndCall != null) {
       widget.onEndCall!();
     } else {
-      // Pop back to HomeScreen
       Navigator.of(context).popUntil((route) => route.isFirst);
     }
   }
 
-  Future<void> _handlePeerEndedCall() async {
-    _stopTimer();
-    await _webrtc.endCall();
-
-    if (!mounted) return;
+  void _handleCallEnded() {
+    if (_isEndingCall) return;
+    setState(() {
+      _isEndingCall = true;
+    });
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Call ended by remote peer.'),
+        content: Text('Call ended.'),
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -193,52 +136,59 @@ class _InCallScreenState extends State<InCallScreen> {
   @override
   void dispose() {
     _stopTimer();
-    if (_webrtcListener != null) {
-      _webrtc.removeListener(_webrtcListener!);
-    }
-    _signalingSubscription?.cancel();
+    _callController?.removeListener(_handleControllerStateChange);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final String stateText = _formatCallState(_displayState);
-    final Color stateColor = _statusColor(_displayState);
-    final bool isCallActive = _displayState == CallState.connected;
+    final isConnected = _callController?.state == CallState.connected;
+    final stateText = isConnected
+        ? 'Connected (${_formatDuration(_callDuration)})'
+        : 'Connecting...';
+    final stateColor = isConnected ? Colors.green : Colors.amber;
+    final isMuted = _callController?.isMuted ?? false;
+    final isSpeakerOn = _callController?.isSpeakerOn ?? false;
 
-    return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 32.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              // Header: Contact Name and Call Status / Duration
-              Column(
-                children: [
-                  const SizedBox(height: 16),
-                  Text(
-                    widget.otherUserName,
-                    style: const TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          color: stateColor,
-                          shape: BoxShape.circle,
-                        ),
+    return PopScope(
+      canPop: _isEndingCall,
+      onPopInvokedWithResult: (bool didPop, dynamic result) async {
+        if (didPop) return;
+        debugPrint('[InCallScreen] Back button pressed. Ending call.');
+        await _handleEndCall();
+      },
+      child: Scaffold(
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 32.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Header: Contact Name and Call Status / Duration
+                Column(
+                  children: [
+                    const SizedBox(height: 16),
+                    Text(
+                      widget.otherUserName,
+                      style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
                       ),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            color: stateColor,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
                           stateText,
                           textAlign: TextAlign.center,
                           style: TextStyle(
@@ -247,101 +197,95 @@ class _InCallScreenState extends State<InCallScreen> {
                             color: stateColor,
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-
-              // Center: Animated Audio Activity Indicator
-              AudioPulseIndicator(
-                isActive: isCallActive,
-                isMuted: _webrtc.isMuted,
-              ),
-
-              // Footer: Call Controls (Mute, Speaker, End Call)
-              Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      // Mute / Unmute Button
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton.filledTonal(
-                            key: const Key('mute_btn'),
-                            iconSize: 32,
-                            isSelected: _webrtc.isMuted,
-                            onPressed: isCallActive ||
-                                    _displayState == CallState.connecting
-                                ? () {
-                                    _webrtc.toggleMute();
-                                    setState(() {});
-                                  }
-                                : null,
-                            icon: Icon(
-                              _webrtc.isMuted ? Icons.mic_off : Icons.mic,
-                              color: _webrtc.isMuted ? Colors.red : null,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            _webrtc.isMuted ? 'Unmute' : 'Mute',
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                        ],
-                      ),
-
-                      // Speakerphone Toggle Button
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton.filledTonal(
-                            key: const Key('speaker_btn'),
-                            iconSize: 32,
-                            isSelected: _webrtc.isSpeakerOn,
-                            onPressed: isCallActive ||
-                                    _displayState == CallState.connecting
-                                ? () async {
-                                    await _webrtc.setSpeaker(!_webrtc.isSpeakerOn);
-                                    setState(() {});
-                                  }
-                                : null,
-                            icon: Icon(
-                              _webrtc.isSpeakerOn
-                                  ? Icons.volume_up
-                                  : Icons.volume_down,
-                              color: _webrtc.isSpeakerOn ? Colors.blue : null,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            _webrtc.isSpeakerOn ? 'Speaker' : 'Earpiece',
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 36),
-
-                  // End Call Red Button
-                  SizedBox(
-                    width: 72,
-                    height: 72,
-                    child: FloatingActionButton(
-                      key: const Key('end_call_button'),
-                      backgroundColor: Colors.red,
-                      foregroundColor: Colors.white,
-                      shape: const CircleBorder(),
-                      onPressed: _handleEndCall,
-                      child: const Icon(Icons.call_end, size: 36),
+                      ],
                     ),
-                  ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+
+                // Center: Animated Audio Activity Indicator
+                AudioPulseIndicator(
+                  isActive: isConnected,
+                  isMuted: isMuted,
+                ),
+
+                // Footer: Call Controls (Mute, Speaker, End Call)
+                Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        // Mute / Unmute Button
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton.filledTonal(
+                              key: const Key('mute_btn'),
+                              iconSize: 32,
+                              isSelected: isMuted,
+                              onPressed: () {
+                                _callController?.toggleMute();
+                                setState(() {});
+                              },
+                              icon: Icon(
+                                isMuted ? Icons.mic_off : Icons.mic,
+                                color: isMuted ? Colors.red : null,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              isMuted ? 'Unmute' : 'Mute',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        ),
+
+                        // Speakerphone Toggle Button
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton.filledTonal(
+                              key: const Key('speaker_btn'),
+                              iconSize: 32,
+                              isSelected: isSpeakerOn,
+                              onPressed: () async {
+                                await _callController?.setSpeaker(!isSpeakerOn);
+                                setState(() {});
+                              },
+                              icon: Icon(
+                                isSpeakerOn
+                                    ? Icons.volume_up
+                                    : Icons.volume_down,
+                                color: isSpeakerOn ? Colors.blue : null,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              isSpeakerOn ? 'Speaker' : 'Earpiece',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 36),
+
+                    // End Call Red Button
+                    SizedBox(
+                      width: 72,
+                      height: 72,
+                      child: FloatingActionButton(
+                        key: const Key('end_call_button'),
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                        shape: const CircleBorder(),
+                        onPressed: _handleEndCall,
+                        child: const Icon(Icons.call_end, size: 36),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),

@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart' show ChangeNotifierProvider;
 import '../models/contact_model.dart';
 import '../services/api_service.dart';
+import '../services/call_controller.dart';
 import '../services/signaling_service.dart';
 import '../webrtc_service.dart';
 import 'add_contact_screen.dart';
@@ -16,12 +17,14 @@ class HomeScreen extends StatefulWidget {
   final ApiService? apiService;
   final SignalingService? signalingService;
   final WebRTCService? webrtcService;
+  final CallController? callController;
 
   const HomeScreen({
     super.key,
     this.apiService,
     this.signalingService,
     this.webrtcService,
+    this.callController,
   });
 
   @override
@@ -30,14 +33,15 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final ApiService _apiService;
+  CallController? _callController;
   SignalingService? _signalingService;
   WebRTCService? _webrtcService;
-  StreamSubscription? _incomingCallSubscription;
 
   List<ContactModel> _contacts = [];
   bool _isLoading = true;
   String? _errorMessage;
   String? _callingContactUserId;
+  bool _isNavigatingCall = false;
 
   // Current authenticated user info
   String _currentUserId = '';
@@ -48,18 +52,29 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _apiService = widget.apiService ?? ApiService();
+    _callController = widget.callController;
     _signalingService = widget.signalingService;
     _webrtcService = widget.webrtcService;
+    _listenForCalls();
     _initialize();
   }
 
   Future<void> _initialize() async {
-    _signalingService ??=
+    _callController ??=
+        ChangeNotifierProvider.maybeOf<CallController>(context, listen: false);
+    _signalingService ??= _callController?.signalingService ??
         ChangeNotifierProvider.maybeOf<SignalingService>(context, listen: false) ??
         SignalingService();
-    _webrtcService ??=
+    _webrtcService ??= _callController?.webrtcService ??
         ChangeNotifierProvider.maybeOf<WebRTCService>(context, listen: false) ??
-        WebRTCService(signalingService: _signalingService);
+        WebRTCService();
+
+    if (_callController == null && _signalingService != null && _webrtcService != null) {
+      _callController = CallController(
+        signalingService: _signalingService!,
+        webrtcService: _webrtcService!,
+      );
+    }
 
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
@@ -78,36 +93,36 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!_signalingService!.isConnected) {
         await _signalingService!.connect(userId);
       }
-      _listenForIncomingCalls();
+      _listenForCalls();
       await _loadContacts();
     } else {
       setState(() => _isLoading = false);
     }
   }
 
-  void _listenForIncomingCalls() {
-    _incomingCallSubscription?.cancel();
-    if (_signalingService != null) {
-      _incomingCallSubscription =
-          _signalingService!.incomingCalls.listen((call) {
-        if (!mounted) return;
+  void _listenForCalls() {
+    _callController?.removeListener(_onCallControllerStateChange);
+    _callController?.addListener(_onCallControllerStateChange);
+  }
 
-        _webrtcService ??=
-            ChangeNotifierProvider.maybeOf<WebRTCService>(context, listen: false) ??
-            WebRTCService(signalingService: _signalingService);
+  void _onCallControllerStateChange() {
+    if (!mounted || _callController == null || _isNavigatingCall) return;
 
-        // Navigate to IncomingCallScreen regardless of what screen is currently showing
-        Navigator.of(context, rootNavigator: true).push(
-          MaterialPageRoute(
-            builder: (_) => IncomingCallScreen(
-              callerName: call.callerName,
-              callerId: call.callerId,
-              callId: call.callId,
-              signalingService: _signalingService,
-              webrtcService: _webrtcService,
-            ),
+    if (_callController!.state == CallState.ringing) {
+      _isNavigatingCall = true;
+      Navigator.of(context, rootNavigator: true)
+          .push(
+        MaterialPageRoute(
+          builder: (_) => IncomingCallScreen(
+            callerName: _callController!.otherUserName ?? 'Unknown Caller',
+            callerId: _callController!.otherUserId ?? '',
+            callId: _callController!.currentCallId ?? '',
+            callController: _callController,
           ),
-        );
+        ),
+      )
+          .then((_) {
+        _isNavigatingCall = false;
       });
     }
   }
@@ -142,35 +157,29 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    if (_callController == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Call controller is not initialized.')),
+      );
+      return;
+    }
+
     setState(() {
       _callingContactUserId = contact.contactUserId;
     });
 
     try {
-      final callId = await _signalingService!.callUser(contact.contactUserId);
-      if (!mounted) return;
+      _callController!.startCall(contact.contactUserId, contact.name);
 
-      _webrtcService ??=
-          ChangeNotifierProvider.maybeOf<WebRTCService>(context, listen: false) ??
-          WebRTCService(signalingService: _signalingService);
-
-      // Navigate to OutgoingCallScreen immediately once call_request is dispatched.
-      // OutgoingCallScreen displays the ringing UI and listens for acceptance/rejection/timeout.
-      Navigator.of(context, rootNavigator: true).push(
+      _isNavigatingCall = true;
+      await Navigator.of(context, rootNavigator: true).push(
         MaterialPageRoute(
           builder: (_) => OutgoingCallScreen(
             contactName: contact.name,
-            callId: callId,
             otherUserId: contact.contactUserId,
-            signalingService: _signalingService,
-            webrtcService: _webrtcService,
+            callController: _callController,
           ),
         ),
-      );
-    } on CallFailedException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Call failed: ${e.reason}')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -178,6 +187,7 @@ class _HomeScreenState extends State<HomeScreen> {
         SnackBar(content: Text('Could not start call: $e')),
       );
     } finally {
+      _isNavigatingCall = false;
       if (mounted) {
         setState(() {
           _callingContactUserId = null;
@@ -199,7 +209,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _logout() async {
-    _incomingCallSubscription?.cancel();
+    _callController?.removeListener(_onCallControllerStateChange);
+    _callController?.endCall();
     _signalingService?.disconnect();
 
     final prefs = await SharedPreferences.getInstance();
@@ -215,8 +226,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget? _buildPresenceDot(ContactModel contact) {
-    // Only display online dot if presence information is available.
-    // If not available (null), omit rather than faking it.
     if (contact.isOnline == null) {
       return null;
     }
@@ -232,7 +241,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
-    _incomingCallSubscription?.cancel();
+    _callController?.removeListener(_onCallControllerStateChange);
     _signalingService?.disconnect();
     if (widget.apiService == null) {
       _apiService.dispose();
@@ -400,5 +409,3 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
-
-
