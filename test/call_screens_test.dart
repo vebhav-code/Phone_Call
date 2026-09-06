@@ -93,13 +93,63 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
 
       expect(popped, isTrue);
-      // Verify call_ended was sent over websocket with to_user_id
       expect(
         fakeChannel.sentMessages.any((m) =>
             m.contains('call_ended') &&
             m.contains('call-100') &&
             m.contains('callee-1')),
         isTrue,
+      );
+    });
+
+    testWidgets(
+        'shows no relay server message and pops when webrtc fails with disconnected without TURN',
+        (WidgetTester tester) async {
+      await signalingService.connect('caller-1');
+      webrtcService.setCallStateForTesting(CallState.connecting);
+
+      bool popped = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => ElevatedButton(
+                onPressed: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => OutgoingCallScreen(
+                        contactName: 'Alice',
+                        callId: 'call-100',
+                        otherUserId: 'callee-1',
+                        signalingService: signalingService,
+                        webrtcService: webrtcService,
+                      ),
+                    ),
+                  );
+                  popped = true;
+                },
+                child: const Text('Open Outgoing'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Open Outgoing'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      webrtcService.setLastCallUsedTurnForTesting(false);
+      webrtcService.setCallStateForTesting(CallState.disconnected);
+      await tester.pumpAndSettle();
+
+      expect(popped, isTrue);
+      expect(
+        find.text(
+          'Call failed — no relay server available, this usually means the two devices are on different networks and TURN isn\'t configured',
+        ),
+        findsOneWidget,
       );
     });
   });
@@ -287,8 +337,9 @@ void main() {
       );
     });
 
-    testWidgets('shows network failure message when CallState is disconnected due to ICE failure',
+    testWidgets('shows network failure message when CallState is disconnected due to ICE failure with TURN active',
         (WidgetTester tester) async {
+      webrtcService.setLastCallUsedTurnForTesting(true);
       webrtcService.setIsIceFailureForTesting(true);
       webrtcService.setCallStateForTesting(CallState.disconnected);
 
@@ -304,9 +355,40 @@ void main() {
         ),
       );
 
-      // Verify that actionable network message is displayed instead of generic Disconnected
+      // Verify that actionable network message is displayed when TURN was active
       expect(
         find.text('Call failed — check your network connection'),
+        findsOneWidget,
+      );
+      expect(find.text('Disconnected'), findsNothing);
+    });
+
+    testWidgets(
+        'shows no relay server message when CallState is disconnected and lastCallUsedTurn is false',
+        (WidgetTester tester) async {
+      webrtcService.setCallStateForTesting(CallState.connecting);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: InCallScreen(
+            otherUserName: 'Charlie',
+            callId: 'call-300',
+            otherUserId: 'charlie-123',
+            signalingService: signalingService,
+            webrtcService: webrtcService,
+          ),
+        ),
+      );
+
+      webrtcService.setLastCallUsedTurnForTesting(false);
+      webrtcService.setCallStateForTesting(CallState.disconnected);
+      await tester.pump();
+
+      // Verify distinct TURN missing message is displayed
+      expect(
+        find.text(
+          'Call failed — no relay server available, this usually means the two devices are on different networks and TURN isn\'t configured',
+        ),
         findsOneWidget,
       );
       expect(find.text('Disconnected'), findsNothing);

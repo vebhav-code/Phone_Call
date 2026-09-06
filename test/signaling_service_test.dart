@@ -109,11 +109,13 @@ void main() {
       expect(signalingService.callState, CallLifecycleState.ringing);
     });
 
-    test('callUser sends call_request with to_user_id and completes on call_accepted', () async {
+    test('callUser sends call_request with to_user_id and returns callId immediately', () async {
       await signalingService.connect('user_alice');
 
-      final callFuture = signalingService.callUser('user_bob');
+      final callId = await signalingService.callUser('user_bob');
+      expect(callId, isNotEmpty);
       expect(signalingService.callState, CallLifecycleState.calling);
+      expect(signalingService.currentCallId, callId);
 
       // Verify outgoing call_request
       expect(fakeChannel.sentMessages.length, 1);
@@ -127,32 +129,57 @@ void main() {
         'type': 'call_accepted',
         'call_id': 'call-789',
       }));
+      await Future.delayed(Duration.zero);
 
-      final callId = await callFuture;
-      expect(callId, 'call-789');
       expect(signalingService.callState, CallLifecycleState.inCall);
       expect(signalingService.currentCallId, 'call-789');
     });
 
-    test('callUser throws CallFailedException when peer is offline', () async {
+    test('call_failed transitions callState to failed and sets lastFailureReason', () async {
       await signalingService.connect('user_alice');
 
-      final callFuture = signalingService.callUser('user_bob');
+      await signalingService.callUser('user_bob');
 
       fakeChannel.incomingController.add(jsonEncode({
         'type': 'call_failed',
         'reason': 'offline',
       }));
+      await Future.delayed(Duration.zero);
 
-      await expectLater(
-        callFuture,
-        throwsA(isA<CallFailedException>().having(
-          (e) => e.reason,
-          'reason',
-          'offline',
-        )),
-      );
       expect(signalingService.callState, CallLifecycleState.failed);
+      expect(signalingService.lastFailureReason, 'User is offline');
+    });
+
+    test('call setup times out if no answer arrives within window', () async {
+      final timedSignaling = SignalingService(
+        channelFactory: (uri) => fakeChannel,
+        enableHeartbeat: false,
+        callSetupTimeout: const Duration(milliseconds: 50),
+      );
+      await timedSignaling.connect('user_alice');
+
+      final callId = await timedSignaling.callUser('user_bob');
+      expect(timedSignaling.callState, CallLifecycleState.calling);
+
+      // Wait for the 50ms timeout to fire
+      await Future.delayed(const Duration(milliseconds: 80));
+
+      expect(timedSignaling.callState, CallLifecycleState.failed);
+      expect(timedSignaling.lastFailureReason, 'No answer');
+
+      // Verify auto-cancel call_ended was sent over websocket
+      expect(
+        fakeChannel.sentMessages.any((m) {
+          final decoded = jsonDecode(m) as Map<String, dynamic>;
+          return decoded['type'] == 'call_ended' &&
+              decoded['call_id'] == callId &&
+              decoded['to_user_id'] == 'user_bob' &&
+              decoded['reason'] == 'No answer';
+        }),
+        isTrue,
+      );
+
+      timedSignaling.dispose();
     });
 
     test('acceptCall sends call_accepted explicitly with to_user_id', () async {

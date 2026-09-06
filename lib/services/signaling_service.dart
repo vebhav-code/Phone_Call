@@ -62,6 +62,7 @@ class SignalingService extends ChangeNotifier {
   final String wsBaseUrl;
   final WebSocketChannelFactory _channelFactory;
   final bool enableHeartbeat;
+  final Duration callSetupTimeout;
 
   // Connection state
   WebSocketChannel? _channel;
@@ -70,6 +71,7 @@ class SignalingService extends ChangeNotifier {
   String? _currentUserId;
   Timer? _heartbeatTimer;
   Timer? _reconnectTimer;
+  Timer? _callSetupTimer;
   bool _isExplicitDisconnect = false;
 
   // Call lifecycle state
@@ -77,7 +79,7 @@ class SignalingService extends ChangeNotifier {
   String? _currentCallId;
   String? _currentPartnerId;
   IncomingCall? _currentIncomingCall;
-  Completer<String>? _pendingCallCompleter;
+  String? _lastFailureReason;
 
   // Stream controllers
   final StreamController<IncomingCall> _incomingCallController =
@@ -96,6 +98,7 @@ class SignalingService extends ChangeNotifier {
     this.wsBaseUrl = defaultWsBaseUrl,
     WebSocketChannelFactory? channelFactory,
     this.enableHeartbeat = true,
+    this.callSetupTimeout = const Duration(seconds: 35),
   }) : _channelFactory = channelFactory ?? WebSocketChannel.connect;
 
   // Public getters
@@ -105,6 +108,7 @@ class SignalingService extends ChangeNotifier {
   String? get currentCallId => _currentCallId;
   String? get currentPartnerId => _currentPartnerId;
   IncomingCall? get currentIncomingCall => _currentIncomingCall;
+  String? get lastFailureReason => _lastFailureReason;
 
   Stream<IncomingCall> get incomingCalls => _incomingCallController.stream;
   Stream<Map<String, dynamic>> get signalingPayloads =>
@@ -117,6 +121,9 @@ class SignalingService extends ChangeNotifier {
 
   @visibleForTesting
   Timer? get reconnectTimer => _reconnectTimer;
+
+  @visibleForTesting
+  Timer? get callSetupTimer => _callSetupTimer;
 
   /// Opens the persistent WebSocket connection for [userId].
   Future<void> connect(String userId) async {
@@ -229,8 +236,9 @@ class SignalingService extends ChangeNotifier {
   }
 
   /// Initiates an outgoing call to [contactUserId].
-  /// Sends `call_request` and returns the resulting `call_id` once `call_accepted`
-  /// arrives, or throws [CallFailedException] if the peer is offline or busy.
+  /// Sends `call_request`, starts the call-setup timeout timer, and returns
+  /// immediately with [callId] so the caller UI can navigate to [OutgoingCallScreen]
+  /// right away rather than waiting for remote acceptance.
   Future<String> callUser(String contactUserId) async {
     final cleanTargetId = contactUserId.trim();
     if (!_isConnected || _channel == null) {
@@ -244,24 +252,58 @@ class SignalingService extends ChangeNotifier {
       throw const CallFailedException('Already in an active or pending call');
     }
 
-    _setCallState(CallLifecycleState.calling);
+    final callId = 'call_${DateTime.now().millisecondsSinceEpoch}';
+    _currentCallId = callId;
     _currentPartnerId = cleanTargetId;
-    _pendingCallCompleter = Completer<String>();
+    _lastFailureReason = null;
+    _setCallState(CallLifecycleState.calling);
 
     _sendSignalingMessage({
       'type': 'call_request',
+      'call_id': callId,
       'to_user_id': cleanTargetId,
     });
 
-    return _pendingCallCompleter!.future;
+    _startCallSetupTimeout(cleanTargetId, callId);
+
+    return callId;
+  }
+
+  void _startCallSetupTimeout(String targetUserId, String callId) {
+    _cancelCallSetupTimeout();
+    _callSetupTimer = Timer(callSetupTimeout, () {
+      if (_callState == CallLifecycleState.calling && _currentCallId == callId) {
+        debugPrint(
+          '[SignalingService] Call setup timed out after ${callSetupTimeout.inSeconds}s with no answer from $targetUserId. Auto-cancelling call.',
+        );
+        _sendSignalingMessage({
+          'type': 'call_ended',
+          'call_id': callId,
+          'to_user_id': targetUserId,
+          'reason': 'No answer',
+        });
+        _lastFailureReason = 'No answer';
+        _currentCallId = null;
+        _currentPartnerId = null;
+        _currentIncomingCall = null;
+        _setCallState(CallLifecycleState.failed);
+      }
+    });
+  }
+
+  void _cancelCallSetupTimeout() {
+    _callSetupTimer?.cancel();
+    _callSetupTimer = null;
   }
 
   /// Accepts an incoming call with [callId] from [callerId].
   /// Explicitly includes [to_user_id] in the payload.
   void acceptCall(String callId, String callerId) {
+    _cancelCallSetupTimeout();
     _currentCallId = callId;
     _currentPartnerId = callerId;
     _currentIncomingCall = null;
+    _lastFailureReason = null;
 
     _sendSignalingMessage({
       'type': 'call_accepted',
@@ -275,6 +317,7 @@ class SignalingService extends ChangeNotifier {
   /// Rejects an incoming call with [callId] from [callerId].
   /// Explicitly includes [to_user_id] in the payload.
   void rejectCall(String callId, String callerId) {
+    _cancelCallSetupTimeout();
     _sendSignalingMessage({
       'type': 'call_rejected',
       'call_id': callId,
@@ -293,6 +336,7 @@ class SignalingService extends ChangeNotifier {
   /// Ends an active call or cancels an outgoing call.
   /// Explicitly includes [to_user_id] in the payload (falling back to [_currentPartnerId] if omitted).
   void endCall(String callId, [String? otherUserId]) {
+    _cancelCallSetupTimeout();
     final targetUserId = (otherUserId != null && otherUserId.trim().isNotEmpty)
         ? otherUserId.trim()
         : (_currentPartnerId ?? '');
@@ -302,13 +346,6 @@ class SignalingService extends ChangeNotifier {
       'call_id': callId,
       'to_user_id': targetUserId,
     });
-
-    if (_pendingCallCompleter != null && !_pendingCallCompleter!.isCompleted) {
-      _pendingCallCompleter!.completeError(
-        const CallFailedException('Call ended by user'),
-      );
-      _pendingCallCompleter = null;
-    }
 
     _currentCallId = null;
     _currentPartnerId = null;
@@ -364,9 +401,11 @@ class SignalingService extends ChangeNotifier {
 
   /// Resets the call state to idle (e.g. to dismiss ended/failed call screens).
   void resetCallState() {
+    _cancelCallSetupTimeout();
     _currentCallId = null;
     _currentPartnerId = null;
     _currentIncomingCall = null;
+    _lastFailureReason = null;
     _setCallState(CallLifecycleState.idle);
   }
 
@@ -381,6 +420,7 @@ class SignalingService extends ChangeNotifier {
 
       switch (type) {
         case 'incoming_call':
+          _cancelCallSetupTimeout();
           final callId = (data['call_id'] ?? '').toString();
           final callerId =
               (data['from_user_id'] ?? data['caller_id'] ?? '').toString();
@@ -406,56 +446,43 @@ class SignalingService extends ChangeNotifier {
           break;
 
         case 'call_accepted':
+          _cancelCallSetupTimeout();
           final callId =
               (data['call_id'] ?? _currentCallId ?? '').toString();
-          _currentCallId = callId;
-          _setCallState(CallLifecycleState.inCall);
-
-          if (_pendingCallCompleter != null &&
-              !_pendingCallCompleter!.isCompleted) {
-            _pendingCallCompleter!.complete(callId);
-            _pendingCallCompleter = null;
+          if (callId.isNotEmpty) {
+            _currentCallId = callId;
           }
+          _setCallState(CallLifecycleState.inCall);
           break;
 
         case 'call_rejected':
+          _cancelCallSetupTimeout();
+          _lastFailureReason = 'Call was rejected by callee';
           _setCallState(CallLifecycleState.ended);
-          if (_pendingCallCompleter != null &&
-              !_pendingCallCompleter!.isCompleted) {
-            _pendingCallCompleter!.completeError(
-              const CallRejectedException('Call was rejected by callee'),
-            );
-            _pendingCallCompleter = null;
-          }
           _currentCallId = null;
           _currentPartnerId = null;
           _currentIncomingCall = null;
           break;
 
         case 'call_failed':
+          _cancelCallSetupTimeout();
           final reason = (data['reason'] ?? 'call_failed').toString();
+          _lastFailureReason = (reason == 'offline')
+              ? 'User is offline'
+              : (reason == 'busy')
+                  ? 'User is busy'
+                  : reason;
           _setCallState(CallLifecycleState.failed);
-          if (_pendingCallCompleter != null &&
-              !_pendingCallCompleter!.isCompleted) {
-            _pendingCallCompleter!.completeError(CallFailedException(reason));
-            _pendingCallCompleter = null;
-          }
           _currentCallId = null;
           _currentPartnerId = null;
           _currentIncomingCall = null;
           break;
 
         case 'call_ended':
+          _cancelCallSetupTimeout();
+          _lastFailureReason =
+              data['reason']?.toString() ?? 'Call ended by remote peer';
           _setCallState(CallLifecycleState.ended);
-          if (_pendingCallCompleter != null &&
-              !_pendingCallCompleter!.isCompleted) {
-            _pendingCallCompleter!.completeError(
-              CallFailedException(
-                data['reason']?.toString() ?? 'Call ended by remote peer',
-              ),
-            );
-            _pendingCallCompleter = null;
-          }
           _currentCallId = null;
           _currentPartnerId = null;
           _currentIncomingCall = null;
@@ -484,17 +511,11 @@ class SignalingService extends ChangeNotifier {
   }
 
   void _handleDisconnect() {
+    _cancelCallSetupTimeout();
     _stopHeartbeat();
     _isConnected = false;
+    _lastFailureReason = 'WebSocket disconnected';
     notifyListeners();
-
-    if (_pendingCallCompleter != null &&
-        !_pendingCallCompleter!.isCompleted) {
-      _pendingCallCompleter!.completeError(
-        const CallFailedException('WebSocket disconnected'),
-      );
-      _pendingCallCompleter = null;
-    }
 
     if (!_isExplicitDisconnect) {
       _scheduleReconnect();
@@ -513,6 +534,7 @@ class SignalingService extends ChangeNotifier {
   @override
   void dispose() {
     _isExplicitDisconnect = true;
+    _cancelCallSetupTimeout();
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _stopHeartbeat();

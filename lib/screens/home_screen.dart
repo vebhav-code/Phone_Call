@@ -154,7 +154,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ChangeNotifierProvider.maybeOf<WebRTCService>(context, listen: false) ??
           WebRTCService(signalingService: _signalingService);
 
-      // Navigate to OutgoingCallScreen on call accepted
+      // Navigate to OutgoingCallScreen immediately once call_request is dispatched.
+      // OutgoingCallScreen displays the ringing UI and listens for acceptance/rejection/timeout.
       Navigator.of(context, rootNavigator: true).push(
         MaterialPageRoute(
           builder: (_) => OutgoingCallScreen(

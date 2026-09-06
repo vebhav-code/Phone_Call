@@ -53,6 +53,10 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeOut),
     );
 
+    // Pre-initialize WebRTC peer connection, audio session, and ICE candidate gathering
+    // in parallel with the callee's phone ringing so the SDP offer is ready immediately when accepted.
+    _webrtc?.startAsCaller(widget.callId, widget.otherUserId);
+
     _initCallListeners();
   }
 
@@ -73,11 +77,15 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen>
             break;
 
           case CallLifecycleState.failed:
-            _onCallFailed('Call failed (peer offline or busy)');
+            final reason =
+                _signaling?.lastFailureReason ?? 'Call failed (peer offline or busy)';
+            _onCallFailed(reason);
             break;
 
           case CallLifecycleState.ended:
-            _onCallFailed('Call was rejected or ended');
+            final reason =
+                _signaling?.lastFailureReason ?? 'Call was rejected or ended';
+            _onCallFailed(reason);
             break;
 
           default:
@@ -85,21 +93,37 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen>
         }
       });
     }
+
+    _webrtc?.addListener(_handleWebRTCStateChange);
+  }
+
+  void _handleWebRTCStateChange() {
+    if (!mounted || _isNavigated) return;
+    if (_webrtc?.callState == CallState.disconnected) {
+      _onCallFailed('Disconnected');
+    }
   }
 
   void _onCallAccepted() {
     if (_isNavigated) return;
     _isNavigated = true;
 
-    // Start WebRTC as caller immediately
-    _webrtc?.startAsCaller(widget.callId);
+    final activeCallId = (_signaling?.currentCallId != null &&
+            _signaling!.currentCallId!.isNotEmpty)
+        ? _signaling!.currentCallId!
+        : widget.callId;
+
+    // If WebRTC was not already started or dropped, start it now
+    if (_webrtc != null && _webrtc!.callState == CallState.disconnected) {
+      _webrtc!.startAsCaller(activeCallId, widget.otherUserId);
+    }
 
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
         builder: (_) => InCallScreen(
           otherUserName: widget.contactName,
-          callId: widget.callId,
+          callId: activeCallId,
           otherUserId: widget.otherUserId,
           signalingService: _signaling,
           webrtcService: _webrtc,
@@ -112,9 +136,19 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen>
     if (_isNavigated) return;
     _isNavigated = true;
 
+    final String message;
+    if (_webrtc != null &&
+        !_webrtc!.lastCallUsedTurn &&
+        _webrtc!.callState == CallState.disconnected) {
+      message =
+          'Call failed — no relay server available, this usually means the two devices are on different networks and TURN isn\'t configured';
+    } else {
+      message = reason;
+    }
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(reason),
+        content: Text(message),
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -141,6 +175,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen>
   void dispose() {
     _pulseController.dispose();
     _callStateSub?.cancel();
+    _webrtc?.removeListener(_handleWebRTCStateChange);
     super.dispose();
   }
 

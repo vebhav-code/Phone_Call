@@ -126,6 +126,9 @@ class _InCallScreenState extends State<InCallScreen> {
       case CallState.roomFull:
         return 'Room Full';
       case CallState.disconnected:
+        if (!_webrtc.lastCallUsedTurn) {
+          return 'Call failed — no relay server available, this usually means the two devices are on different networks and TURN isn\'t configured';
+        }
         if (_webrtc.isIceFailure) {
           return 'Call failed — check your network connection';
         }
