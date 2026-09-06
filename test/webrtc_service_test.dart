@@ -204,6 +204,66 @@ void main() {
 
       service.dispose();
     });
+    test('lastCallUsedTurn is true when TURN servers are present and turnConfigured is true', () async {
+      await signalingService.connect('turn-user-2');
+      final mockClient = MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'iceServers': [
+              {'urls': 'stun:stun.l.google.com:19302'},
+              {
+                'urls': ['turn:turn.example.com:3478'],
+                'username': 'turn-user',
+                'credential': 'turn-password',
+              },
+            ],
+            'turnConfigured': true,
+            'ttl': 3600,
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+
+      final apiService = ApiService(client: mockClient);
+      final service = WebRTCService(
+        signalingService: signalingService,
+        apiService: apiService,
+      );
+
+      await service.getIceServers();
+      expect(service.lastCallUsedTurn, isTrue);
+
+      service.dispose();
+    });
+
+    test('lastCallUsedTurn is false when only STUN is present or turnConfigured is false', () async {
+      await signalingService.connect('stun-only-user');
+      final mockClient = MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'iceServers': [
+              {'urls': 'stun:stun.l.google.com:19302'},
+            ],
+            'turnConfigured': false,
+            'ttl': 3600,
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+
+      final apiService = ApiService(client: mockClient);
+      final service = WebRTCService(
+        signalingService: signalingService,
+        apiService: apiService,
+      );
+
+      await service.getIceServers();
+      expect(service.lastCallUsedTurn, isFalse);
+
+      service.dispose();
+    });
   });
 
   group('ICE Restart Resilience', () {
@@ -230,18 +290,43 @@ void main() {
       expect(webrtcService.callState, CallState.connected);
     });
 
-    test('subsequent failure after restart attempt transitions to disconnected', () async {
-      webrtcService.setIsCaller(true);
-      webrtcService.setCallStateForTesting(CallState.connected);
+    test('subsequent failure after restart attempt transitions to disconnected and marks isIceFailure true and notifies signalingService', () async {
+      await signalingService.connect('caller-1');
+      signalingService.acceptCall('call-999', 'callee-2');
 
-      // First failure
-      webrtcService.handleIceFailureOrTimeout();
-      expect(webrtcService.hasAttemptedIceRestart, isTrue);
-      expect(webrtcService.callState, CallState.connected);
+      final service = WebRTCService(signalingService: signalingService);
+      service.setIsCaller(true);
+      service.setCallStateForTesting(CallState.connected);
 
-      // Second failure when restart was already attempted
-      webrtcService.handleIceFailureOrTimeout();
-      expect(webrtcService.callState, CallState.disconnected);
+      // First failure triggers restart
+      service.handleIceFailureOrTimeout();
+      expect(service.hasAttemptedIceRestart, isTrue);
+      expect(service.callState, CallState.connected);
+      expect(service.isIceFailure, isFalse);
+
+      // Second failure marks disconnected, sets isIceFailure, and ends call via signaling
+      service.handleIceFailureOrTimeout();
+      expect(service.callState, CallState.disconnected);
+      expect(service.isIceFailure, isTrue);
+
+      // Verify signalingService sent call_ended
+      expect(
+        fakeChannel.sentMessages.any((m) =>
+            m.contains('call_ended') &&
+            m.contains('call-999') &&
+            m.contains('callee-2')),
+        isTrue,
+      );
+
+      service.dispose();
+    });
+  });
+
+  group('Full Setup Retry Resilience', () {
+    test('maxSetupRetries defaults to 1 and setupRetryCount is initially 0', () {
+      expect(webrtcService.maxSetupRetries, 1);
+      expect(webrtcService.setupRetryCount, 0);
+      expect(webrtcService.hasEverConnected, isFalse);
     });
   });
 

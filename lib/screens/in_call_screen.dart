@@ -51,8 +51,9 @@ class _InCallScreenState extends State<InCallScreen> {
         WebRTCService(signalingService: _signaling);
 
     // Default initial displayed status to Connecting... when entered via active call flow
-    _displayState = _webrtc.callState == CallState.connected
-        ? CallState.connected
+    // unless already connected or in an explicit ICE failure
+    _displayState = (_webrtc.callState == CallState.connected || _webrtc.isIceFailure)
+        ? _webrtc.callState
         : CallState.connecting;
 
     // Listen to WebRTC connection state to start duration timer
@@ -125,6 +126,9 @@ class _InCallScreenState extends State<InCallScreen> {
       case CallState.roomFull:
         return 'Room Full';
       case CallState.disconnected:
+        if (_webrtc.isIceFailure) {
+          return 'Call failed — check your network connection';
+        }
         return 'Disconnected';
     }
   }
@@ -230,12 +234,15 @@ class _InCallScreenState extends State<InCallScreen> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        stateText,
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: stateColor,
+                      Flexible(
+                        child: Text(
+                          stateText,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: stateColor,
+                          ),
                         ),
                       ),
                     ],

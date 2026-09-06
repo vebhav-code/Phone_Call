@@ -291,12 +291,16 @@ class SignalingService extends ChangeNotifier {
   }
 
   /// Ends an active call or cancels an outgoing call.
-  /// Explicitly includes [to_user_id] in the payload.
-  void endCall(String callId, String otherUserId) {
+  /// Explicitly includes [to_user_id] in the payload (falling back to [_currentPartnerId] if omitted).
+  void endCall(String callId, [String? otherUserId]) {
+    final targetUserId = (otherUserId != null && otherUserId.trim().isNotEmpty)
+        ? otherUserId.trim()
+        : (_currentPartnerId ?? '');
+
     _sendSignalingMessage({
       'type': 'call_ended',
       'call_id': callId,
-      'to_user_id': otherUserId,
+      'to_user_id': targetUserId,
     });
 
     if (_pendingCallCompleter != null && !_pendingCallCompleter!.isCompleted) {

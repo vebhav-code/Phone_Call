@@ -35,6 +35,7 @@ class ApiService {
   final String baseUrl;
   final http.Client _client;
   int _lastTurnTtl = 3600;
+  bool? _lastTurnConfigured;
 
   ApiService({
     this.baseUrl = defaultBaseUrl,
@@ -43,6 +44,9 @@ class ApiService {
 
   /// Cached TTL in seconds from the most recent TURN credentials response.
   int get lastTurnTtl => _lastTurnTtl;
+
+  /// Whether the backend indicated TURN is configured ("turnConfigured" field).
+  bool? get lastTurnConfigured => _lastTurnConfigured;
 
   /// Fetches TURN/STUN credentials and ICE servers from GET /turn-credentials?user_id=[userId].
   /// Returns the parsed iceServers list (`List<Map<String, dynamic>>`).
@@ -66,6 +70,7 @@ class ApiService {
       if (ttl != null && ttl > 0) {
         _lastTurnTtl = ttl;
       }
+      _lastTurnConfigured = data['turnConfigured'] as bool?;
       return rawList
           .map((item) => Map<String, dynamic>.from(item as Map))
           .toList();

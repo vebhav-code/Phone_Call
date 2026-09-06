@@ -286,5 +286,30 @@ void main() {
         isTrue,
       );
     });
+
+    testWidgets('shows network failure message when CallState is disconnected due to ICE failure',
+        (WidgetTester tester) async {
+      webrtcService.setIsIceFailureForTesting(true);
+      webrtcService.setCallStateForTesting(CallState.disconnected);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: InCallScreen(
+            otherUserName: 'Charlie',
+            callId: 'call-300',
+            otherUserId: 'charlie-123',
+            signalingService: signalingService,
+            webrtcService: webrtcService,
+          ),
+        ),
+      );
+
+      // Verify that actionable network message is displayed instead of generic Disconnected
+      expect(
+        find.text('Call failed — check your network connection'),
+        findsOneWidget,
+      );
+      expect(find.text('Disconnected'), findsNothing);
+    });
   });
 }
