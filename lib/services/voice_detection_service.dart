@@ -184,7 +184,9 @@ class VoiceDetectionService extends ChangeNotifier {
       if (detectionResult.success) {
         debugPrint(
           '[VoiceDetectionService] Voice detected successfully: '
-          'type=${detectionResult.voiceType}, confidence=${detectionResult.confidence}',
+          'verdict=${detectionResult.verdict}, '
+          'fake=${detectionResult.fakeProbability}, '
+          'bonafide=${detectionResult.bonafideScore}',
         );
         _result = detectionResult;
         _status = VoiceAnalysisStatus.success;

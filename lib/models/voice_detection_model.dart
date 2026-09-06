@@ -1,44 +1,45 @@
 /// Model representing the AI voice detection response from POST /voice-detection.
 class VoiceDetectionResult {
   final bool success;
-  final String voiceType;
-  final double confidence;
+  final double fakeProbability;
+  final double bonafideScore;
+  final String verdict;
   final String? message;
 
   const VoiceDetectionResult({
     required this.success,
-    required this.voiceType,
-    required this.confidence,
+    required this.fakeProbability,
+    required this.bonafideScore,
+    required this.verdict,
     this.message,
   });
 
   factory VoiceDetectionResult.fromJson(Map<String, dynamic> json) {
     return VoiceDetectionResult(
       success: json['success'] as bool? ?? false,
-      voiceType: (json['voice_type'] ?? json['voiceType'] ?? '').toString(),
-      confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
+      fakeProbability: (json['fake_probability'] as num?)?.toDouble() ?? 0.0,
+      bonafideScore: (json['bonafide_score'] as num?)?.toDouble() ?? 0.0,
+      verdict: (json['verdict'] ?? '').toString(),
       message: json['message']?.toString(),
     );
   }
 
-  /// Formatted voice type for user display (e.g. 'Human' or 'AI').
-  String get displayVoiceType {
-    final upper = voiceType.trim().toUpperCase();
-    if (upper == 'FAKE' || upper == 'AI' || upper == 'SYNTHETIC' || upper == 'SPOOF') {
-      return 'AI';
-    }
-    if (upper == 'REAL' || upper == 'HUMAN') {
-      return 'Human';
-    }
-    if (voiceType.isNotEmpty) {
-      return '${voiceType[0].toUpperCase()}${voiceType.substring(1).toLowerCase()}';
-    }
-    return voiceType;
+  static String _formatPercentage(double value) {
+    final pct = value <= 1.0 ? value * 100 : value;
+    final str = pct.toStringAsFixed(2);
+    return str.endsWith('.00') ? '${pct.toInt()}%' : '$str%';
   }
 
-  /// Formatted confidence percentage (e.g. '94%' or '91%').
-  String get displayConfidence {
-    final pct = confidence <= 1.0 ? (confidence * 100).round() : confidence.round();
-    return '$pct%';
+  /// Formatted fake probability percentage (e.g. '13.38%').
+  String get displayFakeProbability => _formatPercentage(fakeProbability);
+
+  /// Formatted bonafide score percentage (e.g. '86.62%').
+  String get displayBonafideScore => _formatPercentage(bonafideScore);
+
+  /// Verdict in uppercase (e.g. 'REAL' or 'FAKE').
+  String get displayVerdict {
+    final v = verdict.trim().toUpperCase();
+    if (v.isNotEmpty) return v;
+    return 'UNKNOWN';
   }
 }

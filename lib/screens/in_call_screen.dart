@@ -438,38 +438,76 @@ class _InCallScreenState extends State<InCallScreen> {
 
       case VoiceAnalysisStatus.success:
         if (result == null) return null;
+        final isReal = result.displayVerdict == 'REAL';
+        final verdictColor = isReal ? Colors.greenAccent : Colors.redAccent;
+
         return Container(
           key: const Key('voice_analysis_result'),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: BoxDecoration(
             color: Colors.black38,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: result.displayVoiceType == 'AI'
-                  ? Colors.purpleAccent.withValues(alpha: 0.5)
-                  : Colors.greenAccent.withValues(alpha: 0.5),
+              color: verdictColor.withValues(alpha: 0.5),
               width: 1,
             ),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                'Voice Type: ${result.displayVoiceType}',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
+              const Text(
+                'Voice Analysis',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white70,
+                  letterSpacing: 0.5,
                 ),
               ),
               const SizedBox(height: 2),
               Text(
-                'Confidence: ${result.displayConfidence}',
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: Colors.white70,
+                result.displayVerdict,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: verdictColor,
+                  letterSpacing: 1.0,
                 ),
               ),
+              const SizedBox(height: 4),
+              if (isReal) ...[
+                Text(
+                  'Bonafide Score: ${result.displayBonafideScore}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.white70,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Fake Probability: ${result.displayFakeProbability}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.white70,
+                  ),
+                ),
+              ] else ...[
+                Text(
+                  'Fake Probability: ${result.displayFakeProbability}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.white70,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Bonafide Score: ${result.displayBonafideScore}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.white70,
+                  ),
+                ),
+              ],
             ],
           ),
         );

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -63,45 +62,38 @@ class TestVoiceDetectionService extends VoiceDetectionService {
 
 void main() {
   group('VoiceDetectionResult Model Tests', () {
-    test('parses successful JSON with decimal confidence correctly', () {
+    test('parses REAL verdict with scores correctly', () {
       final json = {
         'success': true,
-        'voice_type': 'FAKE',
-        'confidence': 0.8407,
+        'fake_probability': 0.1338,
+        'bonafide_score': 0.8662,
+        'verdict': 'REAL',
       };
       final result = VoiceDetectionResult.fromJson(json);
 
       expect(result.success, isTrue);
-      expect(result.voiceType, 'FAKE');
-      expect(result.displayVoiceType, 'AI');
-      expect(result.confidence, 0.8407);
-      expect(result.displayConfidence, '84%');
+      expect(result.fakeProbability, 0.1338);
+      expect(result.bonafideScore, 0.8662);
+      expect(result.verdict, 'REAL');
+      expect(result.displayVerdict, 'REAL');
+      expect(result.displayBonafideScore, '86.62%');
+      expect(result.displayFakeProbability, '13.38%');
     });
 
-    test('parses successful JSON with percentage confidence and HUMAN voice', () {
+    test('parses FAKE verdict with scores correctly', () {
       final json = {
         'success': true,
-        'voice_type': 'HUMAN',
-        'confidence': 94.0,
+        'fake_probability': 0.95,
+        'bonafide_score': 0.05,
+        'verdict': 'FAKE',
       };
       final result = VoiceDetectionResult.fromJson(json);
 
       expect(result.success, isTrue);
-      expect(result.displayVoiceType, 'Human');
-      expect(result.displayConfidence, '94%');
-    });
-
-    test('parses AI voice type and 91% confidence', () {
-      final json = {
-        'success': true,
-        'voice_type': 'AI',
-        'confidence': 91,
-      };
-      final result = VoiceDetectionResult.fromJson(json);
-
-      expect(result.success, isTrue);
-      expect(result.displayVoiceType, 'AI');
-      expect(result.displayConfidence, '91%');
+      expect(result.verdict, 'FAKE');
+      expect(result.displayVerdict, 'FAKE');
+      expect(result.displayFakeProbability, '95%');
+      expect(result.displayBonafideScore, '5%');
     });
 
     test('parses failure response with message', () {
@@ -113,11 +105,12 @@ void main() {
 
       expect(result.success, isFalse);
       expect(result.message, 'Voice detection failed');
+      expect(result.displayVerdict, 'UNKNOWN');
     });
   });
 
   group('ApiService.detectVoice Tests', () {
-    test('detectVoiceBytes successfully sends multipart file and receives result', () async {
+    test('detectVoiceBytes successfully sends multipart file and receives new result schema', () async {
       final mockClient = http_testing.MockClient((request) async {
         expect(request.url.path, '/voice-detection');
         expect(request.method, 'POST');
@@ -126,8 +119,9 @@ void main() {
         return http.Response(
           jsonEncode({
             'success': true,
-            'voice_type': 'Human',
-            'confidence': 0.94,
+            'fake_probability': 0.1338,
+            'bonafide_score': 0.8662,
+            'verdict': 'REAL',
           }),
           200,
         );
@@ -137,8 +131,9 @@ void main() {
       final result = await apiService.detectVoiceBytes([1, 2, 3, 4]);
 
       expect(result.success, isTrue);
-      expect(result.displayVoiceType, 'Human');
-      expect(result.displayConfidence, '94%');
+      expect(result.displayVerdict, 'REAL');
+      expect(result.displayBonafideScore, '86.62%');
+      expect(result.displayFakeProbability, '13.38%');
     });
 
     test('detectVoice throws ApiException on HTTP 500', () async {
@@ -159,14 +154,15 @@ void main() {
   });
 
   group('VoiceDetectionService Lifecycle Tests', () {
-    test('completes 10s recording, uploads MP3, and displays result', () async {
+    test('completes 10s recording, uploads MP3, and displays result with verdict and scores', () async {
       final mockRecorder = MockRemoteAudioRecorder();
       final mockClient = http_testing.MockClient((request) async {
         return http.Response(
           jsonEncode({
             'success': true,
-            'voice_type': 'AI',
-            'confidence': 0.91,
+            'fake_probability': 0.1338,
+            'bonafide_score': 0.8662,
+            'verdict': 'REAL',
           }),
           200,
         );
@@ -192,8 +188,9 @@ void main() {
 
       expect(mockRecorder.isStopped, isTrue);
       expect(service.status, VoiceAnalysisStatus.success);
-      expect(service.result?.displayVoiceType, 'AI');
-      expect(service.result?.displayConfidence, '91%');
+      expect(service.result?.displayVerdict, 'REAL');
+      expect(service.result?.displayBonafideScore, '86.62%');
+      expect(service.result?.displayFakeProbability, '13.38%');
 
       // Temporary MP3 should have been cleaned up
       if (mockRecorder.lastRecordedPath != null) {
@@ -323,7 +320,7 @@ void main() {
   });
 
   group('InCallScreen Receiver UI Tests', () {
-    testWidgets('receiver screen displays all voice analysis states correctly', (tester) async {
+    testWidgets('receiver screen displays all voice analysis states with verdict and scores', (tester) async {
       final testService = TestVoiceDetectionService();
 
       await tester.pumpWidget(
@@ -354,24 +351,38 @@ void main() {
       expect(find.text('Analyzing voice...'), findsOneWidget);
       expect(find.byKey(const Key('voice_analysis_analyzing')), findsOneWidget);
 
-      // 4. Success state (Human)
+      // 4. Success state (REAL)
       testService.emitStatus(
         VoiceAnalysisStatus.success,
-        const VoiceDetectionResult(success: true, voiceType: 'Human', confidence: 0.94),
+        const VoiceDetectionResult(
+          success: true,
+          fakeProbability: 0.1338,
+          bonafideScore: 0.8662,
+          verdict: 'REAL',
+        ),
       );
       await tester.pump();
-      expect(find.text('Voice Type: Human'), findsOneWidget);
-      expect(find.text('Confidence: 94%'), findsOneWidget);
+      expect(find.text('Voice Analysis'), findsOneWidget);
+      expect(find.text('REAL'), findsOneWidget);
+      expect(find.text('Bonafide Score: 86.62%'), findsOneWidget);
+      expect(find.text('Fake Probability: 13.38%'), findsOneWidget);
       expect(find.byKey(const Key('voice_analysis_result')), findsOneWidget);
 
-      // 5. Success state (AI)
+      // 5. Success state (FAKE)
       testService.emitStatus(
         VoiceAnalysisStatus.success,
-        const VoiceDetectionResult(success: true, voiceType: 'AI', confidence: 91.0),
+        const VoiceDetectionResult(
+          success: true,
+          fakeProbability: 0.95,
+          bonafideScore: 0.05,
+          verdict: 'FAKE',
+        ),
       );
       await tester.pump();
-      expect(find.text('Voice Type: AI'), findsOneWidget);
-      expect(find.text('Confidence: 91%'), findsOneWidget);
+      expect(find.text('Voice Analysis'), findsOneWidget);
+      expect(find.text('FAKE'), findsOneWidget);
+      expect(find.text('Fake Probability: 95%'), findsOneWidget);
+      expect(find.text('Bonafide Score: 5%'), findsOneWidget);
 
       // 6. Recording failed
       testService.emitStatus(VoiceAnalysisStatus.recordingFailed);
