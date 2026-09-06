@@ -59,21 +59,42 @@ class _HomeScreenState extends State<HomeScreen> {
     _initialize();
   }
 
+  bool _createdLocalSignaling = false;
+  bool _createdLocalWebRTC = false;
+  bool _createdLocalCallController = false;
+
   Future<void> _initialize() async {
     _callController ??=
         ChangeNotifierProvider.maybeOf<CallController>(context, listen: false);
-    _signalingService ??= _callController?.signalingService ??
-        ChangeNotifierProvider.maybeOf<SignalingService>(context, listen: false) ??
-        SignalingService();
-    _webrtcService ??= _callController?.webrtcService ??
-        ChangeNotifierProvider.maybeOf<WebRTCService>(context, listen: false) ??
-        WebRTCService();
+
+    if (_signalingService == null) {
+      final sharedSignaling = _callController?.signalingService ??
+          ChangeNotifierProvider.maybeOf<SignalingService>(context, listen: false);
+      if (sharedSignaling != null) {
+        _signalingService = sharedSignaling;
+      } else {
+        _signalingService = SignalingService();
+        _createdLocalSignaling = true;
+      }
+    }
+
+    if (_webrtcService == null) {
+      final sharedWebRTC = _callController?.webrtcService ??
+          ChangeNotifierProvider.maybeOf<WebRTCService>(context, listen: false);
+      if (sharedWebRTC != null) {
+        _webrtcService = sharedWebRTC;
+      } else {
+        _webrtcService = WebRTCService();
+        _createdLocalWebRTC = true;
+      }
+    }
 
     if (_callController == null && _signalingService != null && _webrtcService != null) {
       _callController = CallController(
         signalingService: _signalingService!,
         webrtcService: _webrtcService!,
       );
+      _createdLocalCallController = true;
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -242,7 +263,15 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _callController?.removeListener(_onCallControllerStateChange);
-    _signalingService?.disconnect();
+    if (_createdLocalCallController) {
+      _callController?.dispose();
+    }
+    if (_createdLocalWebRTC) {
+      _webrtcService?.dispose();
+    }
+    if (_createdLocalSignaling) {
+      _signalingService?.dispose();
+    }
     if (widget.apiService == null) {
       _apiService.dispose();
     }

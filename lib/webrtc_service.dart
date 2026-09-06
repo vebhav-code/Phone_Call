@@ -205,16 +205,32 @@ class WebRTCService extends ChangeNotifier {
     // Stop local tracks
     if (_localStream != null) {
       for (final track in _localStream!.getTracks()) {
-        await track.stop();
+        try {
+          await track.stop();
+        } catch (e) {
+          debugPrint('[WebRTCService WARN] Error stopping track: $e');
+        }
       }
-      await _localStream!.dispose();
+      try {
+        await _localStream!.dispose();
+      } catch (e) {
+        debugPrint('[WebRTCService WARN] Error disposing local stream: $e');
+      }
       _localStream = null;
     }
 
     // Close peer connection
     if (_peerConnection != null) {
-      await _peerConnection!.close();
-      await _peerConnection!.dispose();
+      try {
+        await _peerConnection!.close();
+      } catch (e) {
+        debugPrint('[WebRTCService WARN] Error closing peer connection: $e');
+      }
+      try {
+        await _peerConnection!.dispose();
+      } catch (e) {
+        debugPrint('[WebRTCService WARN] Error disposing peer connection: $e');
+      }
       _peerConnection = null;
     }
 

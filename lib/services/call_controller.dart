@@ -70,13 +70,22 @@ class CallController extends ChangeNotifier {
     webrtcService.onConnectionState = (connState) {
       debugPrint('[CallController] WebRTC connection state -> $connState');
       if (connState == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
-        _callStartTime = DateTime.now();
+        _callStartTime ??= DateTime.now();
         _setState(CallState.connected);
-      } else if (connState == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-          connState == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
-        if (_state == CallState.connected || _state == CallState.connecting) {
-          debugPrint('[CallController] WebRTC disconnected, ending call cleanly.');
-          endCall();
+      } else if (connState == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+        // Disconnected can be temporary (transient network jitter or negotiation phase).
+        // Log the state, keep the call alive, do NOT send call_ended, do NOT destroy PeerConnection.
+        debugPrint('[CallController] WebRTC connection state is Disconnected (transient). Keeping call alive.');
+      } else if (connState == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+        // Genuine WebRTC connection failure: cleanly end the call
+        debugPrint('[CallController] WebRTC connection Failed. Ending call.');
+        _lastFailureReason = 'WebRTC connection failed';
+        endCall();
+      } else if (connState == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+        debugPrint('[CallController] WebRTC peer connection closed.');
+        if (_state != CallState.idle && _state != CallState.ended) {
+          _cleanupSession();
+          _setState(CallState.idle);
         }
       }
     };
@@ -111,8 +120,8 @@ class CallController extends ChangeNotifier {
       return;
     }
 
-    if (_state != CallState.idle && _state != CallState.ended) {
-      debugPrint('[CallController] Already in call (state: $_state). Resetting first.');
+    if (_state != CallState.idle) {
+      debugPrint('[CallController] Resetting call state before starting new call (was: $_state)');
       resetCallState();
     }
 
@@ -135,7 +144,7 @@ class CallController extends ChangeNotifier {
   /// Sends `call_accepted` using the backend's authoritative [currentCallId],
   /// transitions to [CallState.connecting], initializes WebRTC, and awaits remote offer.
   Future<void> acceptCall() async {
-    if (_currentCallId == null || _otherUserId == null) {
+    if (_currentCallId == null || _currentCallId!.isEmpty || _otherUserId == null) {
       debugPrint('[CallController ERROR] Cannot accept call: missing call_id or caller');
       return;
     }
@@ -159,13 +168,18 @@ class CallController extends ChangeNotifier {
 
   /// Rejects an incoming call.
   void rejectCall() {
-    if (_currentCallId != null && _otherUserId != null) {
-      debugPrint('[CallController] Rejecting call $_currentCallId from $_otherUserId...');
-      signalingService.send({
+    final callId = _currentCallId;
+    final otherUserId = _otherUserId;
+    if (otherUserId != null && otherUserId.isNotEmpty) {
+      debugPrint('[CallController] Rejecting call $callId from $otherUserId...');
+      final payload = <String, dynamic>{
         'type': 'call_rejected',
-        'call_id': _currentCallId,
-        'to_user_id': _otherUserId,
-      });
+        'to_user_id': otherUserId,
+      };
+      if (callId != null && callId.isNotEmpty) {
+        payload['call_id'] = callId;
+      }
+      signalingService.send(payload);
     }
     _cleanupSession();
     _setState(CallState.idle);
@@ -173,13 +187,19 @@ class CallController extends ChangeNotifier {
 
   /// Ends an active or pending call cleanly.
   Future<void> endCall() async {
-    if (_currentCallId != null && _otherUserId != null) {
-      debugPrint('[CallController] Ending call $_currentCallId with $_otherUserId...');
-      signalingService.send({
+    final callId = _currentCallId;
+    final otherUserId = _otherUserId;
+
+    if (otherUserId != null && otherUserId.isNotEmpty) {
+      debugPrint('[CallController] Ending call $callId with $otherUserId...');
+      final payload = <String, dynamic>{
         'type': 'call_ended',
-        'call_id': _currentCallId,
-        'to_user_id': _otherUserId,
-      });
+        'to_user_id': otherUserId,
+      };
+      if (callId != null && callId.isNotEmpty) {
+        payload['call_id'] = callId;
+      }
+      signalingService.send(payload);
     }
 
     await webrtcService.endCall();
@@ -187,14 +207,19 @@ class CallController extends ChangeNotifier {
     _setState(CallState.idle);
   }
 
-  /// Resets call state to idle without sending redundant messages.
+  /// Resets call state to idle without leaving active server state.
   void resetCallState() {
-    if (_currentCallId != null && _otherUserId != null) {
-      signalingService.send({
+    final callId = _currentCallId;
+    final otherUserId = _otherUserId;
+    if (otherUserId != null && otherUserId.isNotEmpty) {
+      final payload = <String, dynamic>{
         'type': 'call_ended',
-        'call_id': _currentCallId,
-        'to_user_id': _otherUserId,
-      });
+        'to_user_id': otherUserId,
+      };
+      if (callId != null && callId.isNotEmpty) {
+        payload['call_id'] = callId;
+      }
+      signalingService.send(payload);
     }
     webrtcService.endCall();
     _cleanupSession();
@@ -225,6 +250,29 @@ class CallController extends ChangeNotifier {
     debugPrint('[CallController RECV]: type=$type');
 
     switch (type) {
+      case 'call_started':
+        final callId = data['call_id']?.toString();
+        final toUserId = data['to_user_id']?.toString();
+        if (_state == CallState.idle || _state == CallState.ended) {
+          // Caller already cancelled before call_started arrived! Send call_ended immediately so backend and callee clear the call.
+          if (callId != null && callId.isNotEmpty) {
+            signalingService.send({
+              'type': 'call_ended',
+              'call_id': callId,
+              if (toUserId != null && toUserId.isNotEmpty) 'to_user_id': toUserId,
+            });
+          }
+          break;
+        }
+        if (callId != null && callId.isNotEmpty) {
+          _currentCallId = callId;
+        }
+        if (toUserId != null && toUserId.isNotEmpty && (_otherUserId == null || _otherUserId!.isEmpty)) {
+          _otherUserId = toUserId;
+        }
+        debugPrint('[CallController RECV] call_started with authoritative call_id: $_currentCallId');
+        break;
+
       case 'incoming_call':
         // Receiver receives incoming call from backend
         final callId = (data['call_id'] ?? '').toString();
@@ -235,7 +283,9 @@ class CallController extends ChangeNotifier {
                 fromUserId)
             .toString();
 
-        _currentCallId = callId;
+        if (callId.isNotEmpty) {
+          _currentCallId = callId;
+        }
         _otherUserId = fromUserId;
         _otherUserName = callerName;
         _lastFailureReason = null;
@@ -284,12 +334,24 @@ class CallController extends ChangeNotifier {
             : (reason == 'busy')
                 ? 'User is busy'
                 : reason;
+        debugPrint('[CallController] Call failed: $_lastFailureReason');
         await webrtcService.endCall();
         _cleanupSession();
         _setState(CallState.ended);
         break;
 
       case 'call_ended':
+        final incomingCallId = data['call_id']?.toString();
+        if (_currentCallId != null &&
+            _currentCallId!.isNotEmpty &&
+            incomingCallId != null &&
+            incomingCallId.isNotEmpty &&
+            incomingCallId != _currentCallId) {
+          debugPrint('[CallController] Ignoring call_ended for different call_id: $incomingCallId (current: $_currentCallId)');
+          break;
+        }
+
+        debugPrint('[CallController] Remote peer ended call $_currentCallId');
         _lastFailureReason = data['reason']?.toString() ?? 'Call ended by remote peer';
         await webrtcService.endCall();
         _cleanupSession();

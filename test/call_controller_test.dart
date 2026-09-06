@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:audio_call_app/services/call_controller.dart';
 import 'package:audio_call_app/services/signaling_service.dart';
 import 'package:audio_call_app/webrtc_service.dart';
@@ -85,6 +86,53 @@ void main() {
       expect(sent['type'], 'call_request');
       expect(sent['to_user_id'], 'user_b');
       expect(sent.containsKey('call_id'), isFalse);
+    });
+
+    test('Caller Flow: backend sends call_started -> stores call_id, keeps state calling without starting WebRTC', () async {
+      await signalingService.connect('user_a');
+      callController.startCall('user_b', 'Bob');
+      fakeChannel.sentMessages.clear();
+
+      // Backend sends call_started with authoritative call_id
+      fakeChannel.incomingController.add(jsonEncode({
+        'type': 'call_started',
+        'call_id': 'backend-authoritative-call-123',
+        'to_user_id': 'user_b',
+      }));
+
+      await Future.delayed(const Duration(milliseconds: 30));
+
+      // State remains calling, call_id is stored immediately
+      expect(callController.state, CallState.calling);
+      expect(callController.currentCallId, 'backend-authoritative-call-123');
+      expect(webrtcService.peerConnection, isNull); // WebRTC not started yet
+    });
+
+    test('Caller Flow: cancelling while ringing sends call_ended with backend call_id and cleans up', () async {
+      await signalingService.connect('user_a');
+      callController.startCall('user_b', 'Bob');
+
+      // Backend sends call_started
+      fakeChannel.incomingController.add(jsonEncode({
+        'type': 'call_started',
+        'call_id': 'backend-authoritative-call-123',
+        'to_user_id': 'user_b',
+      }));
+      await Future.delayed(const Duration(milliseconds: 30));
+      fakeChannel.sentMessages.clear();
+
+      // Caller cancels while ringing
+      await callController.endCall();
+
+      expect(callController.state, CallState.idle);
+      expect(callController.currentCallId, isNull);
+
+      // Sent call_ended with backend-generated ID
+      expect(fakeChannel.sentMessages.length, 1);
+      final sent = jsonDecode(fakeChannel.sentMessages.first) as Map<String, dynamic>;
+      expect(sent['type'], 'call_ended');
+      expect(sent['call_id'], 'backend-authoritative-call-123');
+      expect(sent['to_user_id'], 'user_b');
     });
 
     test('Caller Flow: backend sends call_accepted -> stores call_id, creates offer, enters connecting', () async {
@@ -273,6 +321,112 @@ void main() {
 
       expect(callController.state, CallState.ended);
       expect(callController.lastFailureReason, 'User is offline');
+    });
+
+    test('Busy Handling: call_failed with reason busy clears previous call and allows immediate retry', () async {
+      await signalingService.connect('user_a');
+      callController.startCall('user_b', 'Bob');
+
+      fakeChannel.incomingController.add(jsonEncode({
+        'type': 'call_failed',
+        'reason': 'busy',
+      }));
+      await Future.delayed(const Duration(milliseconds: 20));
+
+      expect(callController.state, CallState.ended);
+      expect(callController.lastFailureReason, 'User is busy');
+      expect(callController.currentCallId, isNull);
+
+      fakeChannel.sentMessages.clear();
+
+      // User immediately retries calling
+      callController.startCall('user_b', 'Bob');
+      expect(callController.state, CallState.calling);
+      expect(callController.currentCallId, isNull);
+
+      expect(fakeChannel.sentMessages.length, 1);
+      final sent = jsonDecode(fakeChannel.sentMessages.first) as Map<String, dynamic>;
+      expect(sent['type'], 'call_request');
+      expect(sent['to_user_id'], 'user_b');
+    });
+
+    test('Remote End Call: call_ended with mismatched call_id is ignored', () async {
+      await signalingService.connect('user_a');
+      callController.startCall('user_b', 'Bob');
+
+      fakeChannel.incomingController.add(jsonEncode({
+        'type': 'call_accepted',
+        'call_id': 'active-call-123',
+      }));
+      await Future.delayed(const Duration(milliseconds: 30));
+
+      expect(callController.state, CallState.connecting);
+      expect(callController.currentCallId, 'active-call-123');
+
+      // Stale call_ended for a DIFFERENT call arrives
+      fakeChannel.incomingController.add(jsonEncode({
+        'type': 'call_ended',
+        'call_id': 'stale-old-call-999',
+      }));
+      await Future.delayed(const Duration(milliseconds: 30));
+
+      // Active call must NOT be ended!
+      expect(callController.state, CallState.connecting);
+      expect(callController.currentCallId, 'active-call-123');
+    });
+
+    test('WebRTC Connection State: Disconnected state does NOT terminate call', () async {
+      await signalingService.connect('user_a');
+      callController.startCall('user_b', 'Bob');
+
+      fakeChannel.incomingController.add(jsonEncode({
+        'type': 'call_accepted',
+        'call_id': 'call-100',
+      }));
+      await Future.delayed(const Duration(milliseconds: 30));
+      fakeChannel.sentMessages.clear();
+
+      // Simulate WebRTC Connected
+      webrtcService.onConnectionState?.call(RTCPeerConnectionState.RTCPeerConnectionStateConnected);
+      expect(callController.state, CallState.connected);
+
+      // Simulate WebRTC Disconnected (transient network jitter or candidate change)
+      webrtcService.onConnectionState?.call(RTCPeerConnectionState.RTCPeerConnectionStateDisconnected);
+
+      // Call MUST stay alive, must NOT send call_ended, must NOT endCall()
+      expect(callController.state, CallState.connected);
+      expect(fakeChannel.sentMessages, isEmpty);
+    });
+
+    test('WebRTC Connection State: Failed state cleanly ends call', () async {
+      await signalingService.connect('user_a');
+      callController.startCall('user_b', 'Bob');
+
+      fakeChannel.incomingController.add(jsonEncode({
+        'type': 'call_accepted',
+        'call_id': 'call-100',
+      }));
+      await Future.delayed(const Duration(milliseconds: 30));
+      fakeChannel.sentMessages.clear();
+
+      // Simulate WebRTC Connected
+      webrtcService.onConnectionState?.call(RTCPeerConnectionState.RTCPeerConnectionStateConnected);
+      expect(callController.state, CallState.connected);
+
+      // Simulate genuine WebRTC Failed
+      webrtcService.onConnectionState?.call(RTCPeerConnectionState.RTCPeerConnectionStateFailed);
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Call must end cleanly
+      expect(callController.state, CallState.idle);
+      expect(callController.currentCallId, isNull);
+      expect(
+        fakeChannel.sentMessages.any((m) {
+          final decoded = jsonDecode(m) as Map<String, dynamic>;
+          return decoded['type'] == 'call_ended' && decoded['call_id'] == 'call-100';
+        }),
+        isTrue,
+      );
     });
   });
 }

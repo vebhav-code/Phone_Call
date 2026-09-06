@@ -86,7 +86,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       MaterialPageRoute(
         builder: (_) => InCallScreen(
           otherUserName: widget.callerName,
-          callId: widget.callId,
+          callId: _callController?.currentCallId ?? widget.callId,
           otherUserId: widget.callerId,
           callController: _callController,
         ),
