@@ -15,6 +15,7 @@ dependencies:
   audio_session: ^0.2.4
   http: ^1.6.0
   shared_preferences: ^2.5.5
+  http_parser: ^4.1.2
 
 dev_dependencies:
   flutter_test:

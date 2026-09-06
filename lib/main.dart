@@ -143,6 +143,7 @@ class AppRoutes {
             callId: args['callId'] as String? ?? '',
             otherUserId: args['otherUserId'] as String?,
             callController: callController,
+            isReceiver: args['isReceiver'] as bool? ?? callController?.isReceiver ?? false,
           ),
         );
 

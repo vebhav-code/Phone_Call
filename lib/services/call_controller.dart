@@ -25,6 +25,7 @@ class CallController extends ChangeNotifier {
   String? _otherUserName;
   String? _lastFailureReason;
   DateTime? _callStartTime;
+  bool _isReceiver = false;
   StreamSubscription<Map<String, dynamic>>? _signalingSub;
 
   CallController({
@@ -40,6 +41,7 @@ class CallController extends ChangeNotifier {
   String? get otherUserName => _otherUserName;
   String? get lastFailureReason => _lastFailureReason;
   DateTime? get callStartTime => _callStartTime;
+  bool get isReceiver => _isReceiver;
 
   bool get isMuted => webrtcService.isMuted;
   bool get isSpeakerOn => webrtcService.isSpeakerOn;
@@ -130,6 +132,7 @@ class CallController extends ChangeNotifier {
     _currentCallId = null; // Awaiting backend authoritative call_id
     _lastFailureReason = null;
     _callStartTime = null;
+    _isReceiver = false;
 
     _setState(CallState.calling);
 
@@ -231,6 +234,7 @@ class CallController extends ChangeNotifier {
     _otherUserId = null;
     _otherUserName = null;
     _callStartTime = null;
+    _isReceiver = false;
   }
 
   void toggleMute() {
@@ -290,6 +294,7 @@ class CallController extends ChangeNotifier {
         _otherUserName = callerName;
         _lastFailureReason = null;
         _callStartTime = null;
+        _isReceiver = true;
 
         _setState(CallState.ringing);
         break;

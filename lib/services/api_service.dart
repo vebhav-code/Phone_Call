@@ -1,8 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import '../config.dart';
 import '../models/contact_model.dart';
 import '../models/user_model.dart';
+import '../models/voice_detection_model.dart';
 
 /// Base exception for API client errors.
 class ApiException implements Exception {
@@ -180,6 +183,43 @@ class ApiService {
         statusCode: response.statusCode,
       );
     }
+  }
+
+  /// Uploads an audio byte buffer to POST /voice-detection using multipart/form-data.
+  Future<VoiceDetectionResult> detectVoiceBytes(
+    List<int> bytes, {
+    String filename = 'remote_voice.mp3',
+  }) async {
+    final uri = Uri.parse('$baseUrl/voice-detection');
+    final request = http.MultipartRequest('POST', uri);
+
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        'file',
+        bytes,
+        filename: filename,
+        contentType: MediaType('audio', 'mpeg'),
+      ),
+    );
+
+    final streamedResponse = await _client.send(request);
+    final response = await http.Response.fromStream(streamedResponse);
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return VoiceDetectionResult.fromJson(data);
+    } else {
+      throw ApiException(
+        _parseErrorMessage(response),
+        statusCode: response.statusCode,
+      );
+    }
+  }
+
+  /// Uploads an MP3 audio file to POST /voice-detection using multipart/form-data.
+  Future<VoiceDetectionResult> detectVoice(File audioFile) async {
+    final bytes = await audioFile.readAsBytes();
+    return detectVoiceBytes(bytes, filename: 'remote_voice.mp3');
   }
 
   /// Closes the underlying HTTP client.

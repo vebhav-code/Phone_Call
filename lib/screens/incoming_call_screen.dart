@@ -89,6 +89,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
           callId: _callController?.currentCallId ?? widget.callId,
           otherUserId: widget.callerId,
           callController: _callController,
+          isReceiver: true,
         ),
       ),
     );

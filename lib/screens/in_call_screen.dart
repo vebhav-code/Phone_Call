@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../main.dart' show ChangeNotifierProvider;
 import '../services/call_controller.dart';
+import '../services/voice_detection_service.dart';
 
 /// Screen displayed during an active 1-to-1 audio call.
 class InCallScreen extends StatefulWidget {
@@ -10,6 +11,8 @@ class InCallScreen extends StatefulWidget {
   final String? otherUserId;
   final CallController? callController;
   final VoidCallback? onEndCall;
+  final bool? isReceiver;
+  final VoiceDetectionService? voiceDetectionService;
 
   const InCallScreen({
     super.key,
@@ -18,6 +21,8 @@ class InCallScreen extends StatefulWidget {
     this.otherUserId,
     this.callController,
     this.onEndCall,
+    this.isReceiver,
+    this.voiceDetectionService,
   });
 
   @override
@@ -33,26 +38,77 @@ class _InCallScreenState extends State<InCallScreen> {
   Duration _callDuration = Duration.zero;
 
   bool _isEndingCall = false;
+  VoiceDetectionService? _voiceDetectionService;
+  bool _createdVoiceService = false;
 
   @override
   void initState() {
     super.initState();
     _callController = widget.callController;
     _callController?.addListener(_handleControllerStateChange);
+
+    final bool initialIsReceiver =
+        widget.isReceiver ?? _callController?.isReceiver ?? false;
+    if (initialIsReceiver) {
+      _initVoiceDetectionService();
+    }
+
     if (_callController?.state == CallState.connected) {
       _startTimer();
+      _checkAndStartVoiceDetection();
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_callController == null && mounted) {
-        _callController = ChangeNotifierProvider.maybeOf<CallController>(context, listen: false);
+      if (!mounted) return;
+      if (_callController == null) {
+        _callController =
+            ChangeNotifierProvider.maybeOf<CallController>(context, listen: false);
         _callController?.addListener(_handleControllerStateChange);
+
+        final isRecv =
+            widget.isReceiver ?? _callController?.isReceiver ?? false;
+        if (isRecv && _voiceDetectionService == null) {
+          _initVoiceDetectionService();
+        }
 
         if (_callController?.state == CallState.connected) {
           _startTimer();
+          _checkAndStartVoiceDetection();
         }
       }
     });
+  }
+
+  void _initVoiceDetectionService() {
+    _voiceDetectionService = widget.voiceDetectionService ?? VoiceDetectionService();
+    if (widget.voiceDetectionService == null) {
+      _createdVoiceService = true;
+    }
+    _voiceDetectionService?.addListener(_handleVoiceDetectionUpdate);
+  }
+
+  void _handleVoiceDetectionUpdate() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _checkAndStartVoiceDetection() {
+    final bool isReceiver =
+        widget.isReceiver ?? _callController?.isReceiver ?? false;
+    if (!isReceiver) return;
+
+    if (_callController?.state == CallState.connected &&
+        _voiceDetectionService != null &&
+        !_voiceDetectionService!.hasStarted) {
+      _voiceDetectionService!.startAnalysis(
+        remoteStream: _callController?.webrtcService.remoteStream,
+        isCallActive: () =>
+            mounted &&
+            !_isEndingCall &&
+            _callController?.state == CallState.connected,
+      );
+    }
   }
 
   void _handleControllerStateChange() {
@@ -61,7 +117,9 @@ class _InCallScreenState extends State<InCallScreen> {
     final state = _callController!.state;
     if (state == CallState.connected && !_stopwatch.isRunning) {
       _startTimer();
+      _checkAndStartVoiceDetection();
     } else if (state == CallState.ended || state == CallState.idle) {
+      _voiceDetectionService?.cancel();
       _stopTimer();
       _handleCallEnded();
     }
@@ -102,6 +160,7 @@ class _InCallScreenState extends State<InCallScreen> {
       _isEndingCall = true;
     });
 
+    _voiceDetectionService?.cancel();
     _stopTimer();
     await _callController?.endCall();
 
@@ -137,6 +196,12 @@ class _InCallScreenState extends State<InCallScreen> {
   void dispose() {
     _stopTimer();
     _callController?.removeListener(_handleControllerStateChange);
+    _voiceDetectionService?.removeListener(_handleVoiceDetectionUpdate);
+    if (_createdVoiceService) {
+      _voiceDetectionService?.dispose();
+    } else {
+      _voiceDetectionService?.cancel();
+    }
     super.dispose();
   }
 
@@ -199,6 +264,10 @@ class _InCallScreenState extends State<InCallScreen> {
                         ),
                       ],
                     ),
+                    if (_buildVoiceAnalysisStatus() != null) ...[
+                      const SizedBox(height: 12),
+                      _buildVoiceAnalysisStatus()!,
+                    ],
                   ],
                 ),
 
@@ -290,6 +359,172 @@ class _InCallScreenState extends State<InCallScreen> {
         ),
       ),
     );
+  }
+
+  Widget? _buildVoiceAnalysisStatus() {
+    final isReceiver = widget.isReceiver ?? _callController?.isReceiver ?? false;
+    if (!isReceiver || _voiceDetectionService == null) {
+      return null;
+    }
+
+    final status = _voiceDetectionService!.status;
+    final result = _voiceDetectionService!.result;
+
+    switch (status) {
+      case VoiceAnalysisStatus.idle:
+        return null;
+
+      case VoiceAnalysisStatus.recording:
+        return Container(
+          key: const Key('voice_analysis_recording'),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.black26,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 8,
+                height: 8,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: Colors.redAccent,
+                ),
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Voice analysis recording...',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.white70,
+                ),
+              ),
+            ],
+          ),
+        );
+
+      case VoiceAnalysisStatus.analyzing:
+        return Container(
+          key: const Key('voice_analysis_analyzing'),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.black26,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 8,
+                height: 8,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: Colors.blueAccent,
+                ),
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Analyzing voice...',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.white70,
+                ),
+              ),
+            ],
+          ),
+        );
+
+      case VoiceAnalysisStatus.success:
+        if (result == null) return null;
+        return Container(
+          key: const Key('voice_analysis_result'),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black38,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: result.displayVoiceType == 'AI'
+                  ? Colors.purpleAccent.withValues(alpha: 0.5)
+                  : Colors.greenAccent.withValues(alpha: 0.5),
+              width: 1,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Voice Type: ${result.displayVoiceType}',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Confidence: ${result.displayConfidence}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: Colors.white70,
+                ),
+              ),
+            ],
+          ),
+        );
+
+      case VoiceAnalysisStatus.recordingFailed:
+        return Container(
+          key: const Key('voice_analysis_recording_failed'),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.black26,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: const Text(
+            'Voice recording failed',
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.amber,
+            ),
+          ),
+        );
+
+      case VoiceAnalysisStatus.uploadFailed:
+        return Container(
+          key: const Key('voice_analysis_upload_failed'),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.black26,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: const Text(
+            'Voice analysis unavailable',
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.amber,
+            ),
+          ),
+        );
+
+      case VoiceAnalysisStatus.analysisFailed:
+        return Container(
+          key: const Key('voice_analysis_failed'),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.black26,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: const Text(
+            'Voice analysis failed',
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.amber,
+            ),
+          ),
+        );
+    }
   }
 }
 

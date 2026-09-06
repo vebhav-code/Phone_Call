@@ -69,6 +69,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen>
             otherUserId: widget.otherUserId ?? _callController?.otherUserId,
             callId: _callController?.currentCallId ?? '',
             callController: _callController,
+            isReceiver: false,
           ),
         ),
       );
