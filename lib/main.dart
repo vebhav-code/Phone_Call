@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/add_contact_screen.dart';
-import 'screens/home_screen.dart';
 import 'screens/in_call_screen.dart';
 import 'screens/incoming_call_screen.dart';
+import 'screens/main_shell.dart';
 import 'screens/outgoing_call_screen.dart';
 import 'screens/registration_screen.dart';
+import 'screens/scam_screen.dart';
 import 'services/call_controller.dart';
 import 'services/signaling_service.dart';
 import 'webrtc_service.dart';
@@ -44,26 +45,36 @@ void main() async {
 
 /// Screen identifiers for routing and navigation.
 enum AppScreen {
+  login,
+  signup,
   registration,
   home,
   addContact,
   outgoingCall,
   incomingCall,
   inCall,
+  scam,
 }
 
 /// Named route definitions and route generator for the app.
 class AppRoutes {
+  static const String login = '/login';
+  static const String signup = '/signup';
   static const String registration = '/registration';
   static const String home = '/home';
   static const String addContact = '/add-contact';
   static const String outgoingCall = '/outgoing-call';
   static const String incomingCall = '/incoming-call';
   static const String inCall = '/in-call';
+  static const String scam = '/scam';
 
   /// Maps an [AppScreen] enum value to its corresponding named route string.
   static String fromScreen(AppScreen screen) {
     switch (screen) {
+      case AppScreen.login:
+        return login;
+      case AppScreen.signup:
+        return signup;
       case AppScreen.registration:
         return registration;
       case AppScreen.home:
@@ -76,6 +87,8 @@ class AppRoutes {
         return incomingCall;
       case AppScreen.inCall:
         return inCall;
+      case AppScreen.scam:
+        return scam;
     }
   }
 
@@ -90,6 +103,18 @@ class AppRoutes {
     );
 
     switch (settings.name) {
+      case login:
+        return MaterialPageRoute(
+          settings: settings,
+          builder: (_) => const LoginScreen(),
+        );
+
+      case signup:
+        return MaterialPageRoute(
+          settings: settings,
+          builder: (_) => const SignupScreen(),
+        );
+
       case registration:
         return MaterialPageRoute(
           settings: settings,
@@ -99,9 +124,15 @@ class AppRoutes {
       case home:
         return MaterialPageRoute(
           settings: settings,
-          builder: (_) => HomeScreen(
+          builder: (_) => MainShell(
             callController: callController,
           ),
+        );
+
+      case scam:
+        return MaterialPageRoute(
+          settings: settings,
+          builder: (_) => const ScamScreen(),
         );
 
       case addContact:
@@ -165,8 +196,25 @@ class AudioCallApp extends StatelessWidget {
       title: 'WebRTC Audio Call',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF0066CC),
+          primary: const Color(0xFF0066CC),
+          surface: const Color(0xFFF8FAFC),
+        ),
+        scaffoldBackgroundColor: const Color(0xFFF8FAFC),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF0A2540),
+          foregroundColor: Colors.white,
+          elevation: 0,
+        ),
+        cardTheme: CardThemeData(
+          color: Colors.white,
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
       ),
       initialRoute: initialHasUser ? AppRoutes.home : AppRoutes.registration,
       onGenerateRoute: (settings) =>

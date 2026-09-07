@@ -115,7 +115,7 @@ void main() {
       // Verify navigation to HomeScreen
       expect(find.byType(HomeScreen), findsOneWidget);
       expect(find.textContaining('Bob Builder'), findsOneWidget);
-      expect(find.textContaining('@bob_builder'), findsOneWidget);
+      expect(find.textContaining('bob_builder'), findsOneWidget);
     });
   });
 

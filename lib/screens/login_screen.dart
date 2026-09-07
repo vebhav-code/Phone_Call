@@ -1,31 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
-import 'login_screen.dart';
 import 'main_shell.dart';
 import 'signup_screen.dart';
 
-export 'login_screen.dart';
-export 'signup_screen.dart';
-
-/// Legacy registration screen retained as a backward-compatible wrapper to [SignupScreen].
-class RegistrationScreen extends StatefulWidget {
+/// Screen allowing existing users to log in using their registered phone number.
+class LoginScreen extends StatefulWidget {
   final ApiService? apiService;
 
-  const RegistrationScreen({super.key, this.apiService});
+  const LoginScreen({super.key, this.apiService});
 
   @override
-  State<RegistrationScreen> createState() => _RegistrationScreenState();
+  State<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _RegistrationScreenState extends State<RegistrationScreen> {
+class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
 
   late final ApiService _apiService;
   bool _isLoading = false;
-  String? _usernameError;
+  String? _phoneError;
   String? _generalError;
 
   @override
@@ -36,7 +31,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
   @override
   void dispose() {
-    _nameController.dispose();
     _phoneController.dispose();
     if (widget.apiService == null) {
       _apiService.dispose();
@@ -44,9 +38,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     super.dispose();
   }
 
-  Future<void> _handleSubmit() async {
+  Future<void> _handleLogin() async {
     setState(() {
-      _usernameError = null;
+      _phoneError = null;
       _generalError = null;
     });
 
@@ -54,42 +48,34 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       return;
     }
 
-    final name = _nameController.text.trim();
     final phone = _phoneController.text.trim();
-
     setState(() => _isLoading = true);
 
     try {
-      final user = await _apiService.registerUser(name, phone);
+      final user = await _apiService.login(phone);
 
+      // Save credentials to SharedPreferences
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('user_id', user.id);
       await prefs.setString('user_name', user.name);
-      await prefs.setString(
-          'phone_number', user.phoneNumber.isNotEmpty ? user.phoneNumber : phone);
-      await prefs.setString(
-          'username', user.username.isNotEmpty ? user.username : phone);
+      await prefs.setString('phone_number', user.phoneNumber.isNotEmpty ? user.phoneNumber : phone);
+      await prefs.setString('username', user.username.isNotEmpty ? user.username : phone);
 
       if (!mounted) return;
 
+      // Navigate to MainShell (hosting Calls & Scam tabs)
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const MainShell()),
       );
-    } on UsernameTakenException catch (e) {
-      setState(() {
-        _usernameError = e.message;
-      });
     } on ApiException catch (e) {
-      if (e.statusCode == 409) {
-        setState(() {
-          _usernameError = e.message;
-        });
-      } else {
-        setState(() {
+      setState(() {
+        if (e.statusCode == 404) {
+          _phoneError = 'No account found with this phone number. Please sign up.';
+        } else {
           _generalError = e.message;
-        });
-      }
+        }
+      });
     } catch (e) {
       setState(() {
         _generalError = 'An unexpected error occurred: $e';
@@ -119,6 +105,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    // Centered Logo & Header
                     Center(
                       child: Container(
                         padding: const EdgeInsets.all(22),
@@ -144,27 +131,28 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 28),
                     const Text(
-                      'Welcome to WebRTC Call',
+                      'Welcome Back',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
-                        fontSize: 24,
+                        fontSize: 26,
                         color: Color(0xFF0F172A),
                       ),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Create your profile to start calling contacts',
+                      'Enter your registered phone number to sign in',
                       style: TextStyle(
                         color: Color(0xFF64748B),
-                        fontSize: 14,
+                        fontSize: 15,
                       ),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 32),
 
+                    // General Error Banner (if any)
                     if (_generalError != null) ...[
                       Container(
                         padding: const EdgeInsets.all(12),
@@ -191,40 +179,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                           ],
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 18),
                     ],
 
+                    // Phone Number Field
                     TextFormField(
-                      key: const Key('name_field'),
-                      controller: _nameController,
-                      textInputAction: TextInputAction.next,
-                      textCapitalization: TextCapitalization.words,
-                      decoration: InputDecoration(
-                        labelText: 'Your Name',
-                        hintText: 'e.g. Alice Smith',
-                        prefixIcon: const Icon(Icons.person_outline),
-                        filled: true,
-                        fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                        ),
-                      ),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Please enter your display name';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 18),
-
-                    TextFormField(
-                      key: const Key('username_field'),
+                      key: const Key('phone_field'),
                       controller: _phoneController,
                       keyboardType: TextInputType.phone,
                       textInputAction: TextInputAction.done,
@@ -232,6 +192,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         labelText: 'Phone Number',
                         hintText: 'e.g. +1 555 123 4567 or 9876543210',
                         prefixIcon: const Icon(Icons.phone_outlined),
+                        errorText: _phoneError,
                         filled: true,
                         fillColor: Colors.white,
                         border: OutlineInputBorder(
@@ -242,29 +203,29 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                           borderRadius: BorderRadius.circular(16),
                           borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
                         ),
-                        errorText: _usernameError,
                       ),
                       onChanged: (_) {
-                        if (_usernameError != null) {
-                          setState(() => _usernameError = null);
+                        if (_phoneError != null) {
+                          setState(() => _phoneError = null);
                         }
                       },
                       validator: (value) {
                         if (value == null || value.trim().isEmpty) {
-                          return 'Please enter a phone number';
+                          return 'Please enter your phone number';
                         }
-                        if (value.trim().length < 3) {
-                          return 'Phone number must be at least 3 characters long';
+                        if (value.trim().length < 4) {
+                          return 'Please enter a valid phone number';
                         }
                         return null;
                       },
-                      onFieldSubmitted: (_) => _handleSubmit(),
+                      onFieldSubmitted: (_) => _handleLogin(),
                     ),
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 24),
 
+                    // Submit Button
                     FilledButton(
-                      key: const Key('register_button'),
-                      onPressed: _isLoading ? null : _handleSubmit,
+                      key: const Key('login_button'),
+                      onPressed: _isLoading ? null : _handleLogin,
                       style: FilledButton.styleFrom(
                         backgroundColor: const Color(0xFF0066CC),
                         foregroundColor: Colors.white,
@@ -272,6 +233,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
+                        elevation: 2,
                       ),
                       child: _isLoading
                           ? const SizedBox(
@@ -283,30 +245,40 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                               ),
                             )
                           : const Text(
-                              'Get Started',
+                              'Log In',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 24),
 
+                    // Link to Sign Up Screen
                     Center(
                       child: TextButton(
+                        key: const Key('signup_link'),
                         onPressed: () {
-                          Navigator.pushReplacement(
+                          Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (_) => LoginScreen(apiService: _apiService),
+                              builder: (_) => SignupScreen(apiService: _apiService),
                             ),
                           );
                         },
-                        child: const Text(
-                          'Already have an account? Log In',
-                          style: TextStyle(
-                            color: Color(0xFF0066CC),
-                            fontWeight: FontWeight.w600,
+                        child: RichText(
+                          text: const TextSpan(
+                            text: 'New here? ',
+                            style: TextStyle(color: Color(0xFF64748B), fontSize: 14),
+                            children: [
+                              TextSpan(
+                                text: 'Create an account',
+                                style: TextStyle(
+                                  color: Color(0xFF0066CC),
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),

@@ -8,7 +8,10 @@ class ContactModel {
   /// The contact's display name.
   final String name;
 
-  /// The contact's unique username.
+  /// The contact's phone number.
+  final String phoneNumber;
+
+  /// The contact's unique username (kept for backwards compatibility).
   final String username;
 
   /// Online presence status (nullable, defaults to false, populated client-side later).
@@ -18,6 +21,7 @@ class ContactModel {
     required this.id,
     required this.contactUserId,
     required this.name,
+    this.phoneNumber = '',
     required this.username,
     this.isOnline = false,
   });
@@ -26,6 +30,15 @@ class ContactModel {
   /// GET /contacts/{user_id} or POST /contacts.
   /// Note: isOnline defaults to false and is populated client-side later.
   factory ContactModel.fromJson(Map<String, dynamic> json) {
+    final phone = (json['phone_number'] ??
+            json['phoneNumber'] ??
+            json['contact']?['phone_number'] ??
+            json['contact']?['phoneNumber'] ??
+            '')
+        .toString();
+    final user =
+        (json['username'] ?? json['contact']?['username'] ?? '').toString();
+
     return ContactModel(
       id: json['id'] is int
           ? json['id'] as int
@@ -36,8 +49,8 @@ class ContactModel {
               '')
           .toString(),
       name: (json['name'] ?? json['contact']?['name'] ?? '').toString(),
-      username:
-          (json['username'] ?? json['contact']?['username'] ?? '').toString(),
+      phoneNumber: phone.isNotEmpty ? phone : user,
+      username: user.isNotEmpty ? user : phone,
       isOnline: json['is_online'] is bool
           ? json['is_online'] as bool
           : (json['isOnline'] is bool ? json['isOnline'] as bool : false),
@@ -51,6 +64,8 @@ class ContactModel {
       'contact_id': contactUserId,
       'contactUserId': contactUserId,
       'name': name,
+      'phone_number': phoneNumber,
+      'phoneNumber': phoneNumber,
       'username': username,
       'is_online': isOnline,
     };
@@ -60,6 +75,7 @@ class ContactModel {
     int? id,
     String? contactUserId,
     String? name,
+    String? phoneNumber,
     String? username,
     bool? isOnline,
   }) {
@@ -67,6 +83,7 @@ class ContactModel {
       id: id ?? this.id,
       contactUserId: contactUserId ?? this.contactUserId,
       name: name ?? this.name,
+      phoneNumber: phoneNumber ?? this.phoneNumber,
       username: username ?? this.username,
       isOnline: isOnline ?? this.isOnline,
     );
@@ -80,6 +97,7 @@ class ContactModel {
           id == other.id &&
           contactUserId == other.contactUserId &&
           name == other.name &&
+          phoneNumber == other.phoneNumber &&
           username == other.username &&
           isOnline == other.isOnline;
 
@@ -88,10 +106,11 @@ class ContactModel {
       id.hashCode ^
       contactUserId.hashCode ^
       name.hashCode ^
+      phoneNumber.hashCode ^
       username.hashCode ^
       isOnline.hashCode;
 
   @override
   String toString() =>
-      'ContactModel(id: $id, contactUserId: $contactUserId, name: $name, username: $username, isOnline: $isOnline)';
+      'ContactModel(id: $id, contactUserId: $contactUserId, name: $name, phoneNumber: $phoneNumber, username: $username, isOnline: $isOnline)';
 }

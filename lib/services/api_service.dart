@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import '../config.dart';
 import '../models/contact_model.dart';
+import '../models/scam_number_model.dart';
 import '../models/user_model.dart';
 import '../models/voice_detection_model.dart';
 
@@ -49,16 +50,17 @@ class ApiService {
         hfToken = hfToken ?? AppConfig.hfToken,
         _client = client ?? http.Client();
 
-  /// Registers a new user with a display name and unique username.
+  /// Registers a new user with a display name and unique phone number.
   /// Throws [UsernameTakenException] if HTTP 409 Conflict is returned.
-  Future<UserModel> registerUser(String name, String username) async {
+  Future<UserModel> registerUser(String name, String phoneNumber) async {
     final uri = Uri.parse('$baseUrl/users');
     final response = await _client.post(
       uri,
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'name': name.trim(),
-        'username': username.trim(),
+        'phone_number': phoneNumber.trim(),
+        'username': phoneNumber.trim(),
       }),
     );
 
@@ -67,6 +69,29 @@ class ApiService {
       return UserModel.fromJson(data);
     } else if (response.statusCode == 409) {
       throw UsernameTakenException(_parseErrorMessage(response));
+    } else {
+      throw ApiException(
+        _parseErrorMessage(response),
+        statusCode: response.statusCode,
+      );
+    }
+  }
+
+  /// Logs in an existing user by looking up their [phoneNumber].
+  /// Returns the authenticated [UserModel].
+  Future<UserModel> login(String phoneNumber) async {
+    final uri = Uri.parse('$baseUrl/login');
+    final response = await _client.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'phone_number': phoneNumber.trim(),
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return UserModel.fromJson(data);
     } else {
       throw ApiException(
         _parseErrorMessage(response),
@@ -271,6 +296,31 @@ class ApiService {
         statusCode: response.statusCode,
       );
     }
+  }
+
+  /// Retrieves the list of scam/flagged numbers from the backend.
+  /// Falls back to mock list if backend is not available yet.
+  Future<List<ScamNumberModel>> getScamNumbers() async {
+    final uri = Uri.parse('$baseUrl/scam-numbers');
+    try {
+      final response = await _client.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        final dynamic decoded = jsonDecode(response.body);
+        if (decoded is List) {
+          return decoded
+              .map((item) =>
+                  ScamNumberModel.fromJson(item as Map<String, dynamic>))
+              .toList();
+        }
+      }
+    } catch (_) {
+      // Backend /scam-numbers not reachable; fallback to mock data below
+    }
+    return ScamNumberModel.getMockScamNumbers();
   }
 
   /// Closes the underlying HTTP client.

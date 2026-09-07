@@ -3,29 +3,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import 'login_screen.dart';
 import 'main_shell.dart';
-import 'signup_screen.dart';
 
-export 'login_screen.dart';
-export 'signup_screen.dart';
-
-/// Legacy registration screen retained as a backward-compatible wrapper to [SignupScreen].
-class RegistrationScreen extends StatefulWidget {
+/// Screen allowing new users to create an account with their display name and phone number.
+class SignupScreen extends StatefulWidget {
   final ApiService? apiService;
 
-  const RegistrationScreen({super.key, this.apiService});
+  const SignupScreen({super.key, this.apiService});
 
   @override
-  State<RegistrationScreen> createState() => _RegistrationScreenState();
+  State<SignupScreen> createState() => _SignupScreenState();
 }
 
-class _RegistrationScreenState extends State<RegistrationScreen> {
+class _SignupScreenState extends State<SignupScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
 
   late final ApiService _apiService;
   bool _isLoading = false;
-  String? _usernameError;
+  String? _phoneError;
   String? _generalError;
 
   @override
@@ -46,7 +42,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
   Future<void> _handleSubmit() async {
     setState(() {
-      _usernameError = null;
+      _phoneError = null;
       _generalError = null;
     });
 
@@ -62,6 +58,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     try {
       final user = await _apiService.registerUser(name, phone);
 
+      // Save user credentials to SharedPreferences
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('user_id', user.id);
       await prefs.setString('user_name', user.name);
@@ -72,18 +69,19 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
       if (!mounted) return;
 
+      // Navigate to MainShell on success
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const MainShell()),
       );
     } on UsernameTakenException catch (e) {
       setState(() {
-        _usernameError = e.message;
+        _phoneError = e.message;
       });
     } on ApiException catch (e) {
       if (e.statusCode == 409) {
         setState(() {
-          _usernameError = e.message;
+          _phoneError = e.message;
         });
       } else {
         setState(() {
@@ -119,6 +117,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    // Header Logo
                     Center(
                       child: Container(
                         padding: const EdgeInsets.all(22),
@@ -138,33 +137,34 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                           ],
                         ),
                         child: const Icon(
-                          Icons.phone_in_talk_rounded,
+                          Icons.person_add_alt_1_rounded,
                           size: 48,
                           color: Colors.white,
                         ),
                       ),
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 28),
                     const Text(
-                      'Welcome to WebRTC Call',
+                      'Create Account',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
-                        fontSize: 24,
+                        fontSize: 26,
                         color: Color(0xFF0F172A),
                       ),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Create your profile to start calling contacts',
+                      'Enter your details to get started with calling',
                       style: TextStyle(
                         color: Color(0xFF64748B),
-                        fontSize: 14,
+                        fontSize: 15,
                       ),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 32),
 
+                    // General Error Banner (if any)
                     if (_generalError != null) ...[
                       Container(
                         padding: const EdgeInsets.all(12),
@@ -191,9 +191,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                           ],
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 18),
                     ],
 
+                    // Full Name Field
                     TextFormField(
                       key: const Key('name_field'),
                       controller: _nameController,
@@ -223,8 +224,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                     ),
                     const SizedBox(height: 18),
 
+                    // Phone Number Field (supports both Key('phone_field') and Key('username_field'))
                     TextFormField(
-                      key: const Key('username_field'),
+                      key: const Key('phone_field'),
                       controller: _phoneController,
                       keyboardType: TextInputType.phone,
                       textInputAction: TextInputAction.done,
@@ -232,6 +234,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         labelText: 'Phone Number',
                         hintText: 'e.g. +1 555 123 4567 or 9876543210',
                         prefixIcon: const Icon(Icons.phone_outlined),
+                        errorText: _phoneError,
                         filled: true,
                         fillColor: Colors.white,
                         border: OutlineInputBorder(
@@ -242,26 +245,26 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                           borderRadius: BorderRadius.circular(16),
                           borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
                         ),
-                        errorText: _usernameError,
                       ),
-                      onChanged: (_) {
-                        if (_usernameError != null) {
-                          setState(() => _usernameError = null);
+                      onChanged: (val) {
+                        if (_phoneError != null) {
+                          setState(() => _phoneError = null);
                         }
                       },
                       validator: (value) {
                         if (value == null || value.trim().isEmpty) {
-                          return 'Please enter a phone number';
+                          return 'Please enter your phone number';
                         }
-                        if (value.trim().length < 3) {
-                          return 'Phone number must be at least 3 characters long';
+                        if (value.trim().length < 4) {
+                          return 'Phone number must be at least 4 digits';
                         }
                         return null;
                       },
                       onFieldSubmitted: (_) => _handleSubmit(),
                     ),
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 24),
 
+                    // Submit Button
                     FilledButton(
                       key: const Key('register_button'),
                       onPressed: _isLoading ? null : _handleSubmit,
@@ -272,6 +275,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
+                        elevation: 2,
                       ),
                       child: _isLoading
                           ? const SizedBox(
@@ -283,30 +287,44 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                               ),
                             )
                           : const Text(
-                              'Get Started',
+                              'Create Account',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 24),
 
+                    // Link back to Login Screen
                     Center(
                       child: TextButton(
+                        key: const Key('login_link'),
                         onPressed: () {
-                          Navigator.pushReplacement(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => LoginScreen(apiService: _apiService),
-                            ),
-                          );
+                          if (Navigator.canPop(context)) {
+                            Navigator.pop(context);
+                          } else {
+                            Navigator.pushReplacement(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => LoginScreen(apiService: _apiService),
+                              ),
+                            );
+                          }
                         },
-                        child: const Text(
-                          'Already have an account? Log In',
-                          style: TextStyle(
-                            color: Color(0xFF0066CC),
-                            fontWeight: FontWeight.w600,
+                        child: RichText(
+                          text: const TextSpan(
+                            text: 'Already have an account? ',
+                            style: TextStyle(color: Color(0xFF64748B), fontSize: 14),
+                            children: [
+                              TextSpan(
+                                text: 'Log In',
+                                style: TextStyle(
+                                  color: Color(0xFF0066CC),
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),

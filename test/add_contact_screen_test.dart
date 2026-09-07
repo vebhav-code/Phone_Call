@@ -75,11 +75,11 @@ void main() {
 
       // Results rendered with Add button
       expect(find.text('Charlie Chaplin'), findsOneWidget);
-      expect(find.text('@charlie'), findsOneWidget);
+      expect(find.text('charlie'), findsOneWidget);
       expect(find.byKey(const Key('add_btn_user-1')), findsOneWidget);
 
       expect(find.text('Charlotte Bronte'), findsOneWidget);
-      expect(find.text('@charlotte'), findsOneWidget);
+      expect(find.text('charlotte'), findsOneWidget);
       expect(find.byKey(const Key('add_btn_user-2')), findsOneWidget);
     });
 

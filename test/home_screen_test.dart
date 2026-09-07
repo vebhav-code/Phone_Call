@@ -108,11 +108,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Bob Builder'), findsOneWidget);
-      expect(find.text('@bob'), findsOneWidget);
+      expect(find.textContaining('bob'), findsOneWidget);
       expect(find.byKey(const Key('call_btn_bob_456')), findsOneWidget);
 
       expect(find.text('Charlie Chaplin'), findsOneWidget);
-      expect(find.text('@charlie'), findsOneWidget);
+      expect(find.textContaining('charlie'), findsOneWidget);
       expect(find.byKey(const Key('call_btn_charlie_789')), findsOneWidget);
     });
 

@@ -4,7 +4,24 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user_model.dart';
 import '../services/api_service.dart';
 
-/// Screen allowing users to search for registered users with debounce and add them as contacts.
+const List<Color> _avatarColors = [
+  Color(0xFF2563EB),
+  Color(0xFF0D9488),
+  Color(0xFF7C3AED),
+  Color(0xFFE11D48),
+  Color(0xFFD97706),
+  Color(0xFF059669),
+  Color(0xFFDB2777),
+  Color(0xFF4F46E5),
+];
+
+Color _getAvatarColor(String seed) {
+  if (seed.isEmpty) return _avatarColors[0];
+  final hash = seed.codeUnits.fold<int>(0, (prev, elem) => prev + elem);
+  return _avatarColors[hash % _avatarColors.length];
+}
+
+/// Screen allowing users to search for registered users by name or phone number and add them as contacts.
 class AddContactScreen extends StatefulWidget {
   final ApiService? apiService;
 
@@ -116,7 +133,6 @@ class _AddContactScreenState extends State<AddContactScreen> {
       // On add success: pop back to HomeScreen with true to trigger refresh
       Navigator.pop(context, true);
     } on ContactAlreadyAddedException {
-      // 409 Conflict: show snackbar, don't crash
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -163,38 +179,76 @@ class _AddContactScreenState extends State<AddContactScreen> {
     final theme = Theme.of(context);
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        title: const Text('Add Contact'),
+        backgroundColor: const Color(0xFF0A2540),
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text(
+          'Add Contact',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+          ),
+        ),
       ),
       body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
         child: Column(
           children: [
-            // Search Input with Debounce & Clear Button
-            TextField(
-              key: const Key('search_contact_field'),
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: 'Search by name or username',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _searchController.clear();
-                          _onSearchChanged('');
-                        },
-                      )
-                    : null,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
+            // Search Input Container
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
-              onChanged: _onSearchChanged,
-              onSubmitted: (val) {
-                _debounceTimer?.cancel();
-                _handleSearch(val.trim());
-              },
+              child: TextField(
+                key: const Key('search_contact_field'),
+                controller: _searchController,
+                decoration: InputDecoration(
+                  hintText: 'Search by name or phone number',
+                  hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
+                  prefixIcon: const Icon(Icons.search, color: Color(0xFF64748B)),
+                  suffixIcon: _searchController.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, color: Color(0xFF64748B)),
+                          onPressed: () {
+                            _searchController.clear();
+                            _onSearchChanged('');
+                          },
+                        )
+                      : null,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: const BorderSide(color: Color(0xFF0066CC)),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                onChanged: _onSearchChanged,
+                onSubmitted: (val) {
+                  _debounceTimer?.cancel();
+                  _handleSearch(val.trim());
+                },
+              ),
             ),
             const SizedBox(height: 16),
 
@@ -219,11 +273,11 @@ class _AddContactScreenState extends State<AddContactScreen> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.person_search, size: 64, color: Colors.grey),
+                      Icon(Icons.person_search_rounded, size: 64, color: Color(0xFF94A3B8)),
                       SizedBox(height: 12),
                       Text(
-                        'Type a name or username to search',
-                        style: TextStyle(color: Colors.grey, fontSize: 16),
+                        'Type a name or phone number to search',
+                        style: TextStyle(color: Color(0xFF64748B), fontSize: 16),
                       ),
                     ],
                   ),
@@ -242,40 +296,79 @@ class _AddContactScreenState extends State<AddContactScreen> {
               Expanded(
                 child: ListView.separated(
                   itemCount: _searchResults.length,
-                  separatorBuilder: (context, index) => const Divider(height: 1),
+                  separatorBuilder: (context, index) => const SizedBox(height: 10),
                   itemBuilder: (context, index) {
                     final user = _searchResults[index];
                     final isAdding = _addingContactUserId == user.id;
+                    final avatarColor = _getAvatarColor(user.name);
+                    final phoneDisplay = user.phoneNumber.isNotEmpty
+                        ? user.phoneNumber
+                        : user.username;
 
-                    return ListTile(
+                    return Container(
                       key: Key('user_tile_${user.id}'),
-                      leading: CircleAvatar(
-                        backgroundColor: theme.colorScheme.secondaryContainer,
-                        child: Text(
-                          user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: theme.colorScheme.onSecondaryContainer,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
                           ),
+                        ],
+                        border: Border.all(
+                          color: const Color(0xFFE2E8F0),
+                          width: 0.8,
                         ),
                       ),
-                      title: Text(
-                        user.name,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      subtitle: Text('@${user.username}'),
-                      trailing: isAdding
-                          ? const SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : FilledButton.tonalIcon(
-                              key: Key('add_btn_${user.id}'),
-                              icon: const Icon(Icons.person_add_alt, size: 18),
-                              label: const Text('Add'),
-                              onPressed: () => _handleAddContact(user),
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                        leading: CircleAvatar(
+                          radius: 22,
+                          backgroundColor: avatarColor,
+                          child: Text(
+                            user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                              fontSize: 16,
                             ),
+                          ),
+                        ),
+                        title: Text(
+                          user.name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                            color: Color(0xFF0F172A),
+                          ),
+                        ),
+                        subtitle: Text(
+                          phoneDisplay,
+                          style: const TextStyle(
+                            color: Color(0xFF64748B),
+                            fontSize: 13,
+                          ),
+                        ),
+                        trailing: isAdding
+                            ? const SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : FilledButton.tonalIcon(
+                                key: Key('add_btn_${user.id}'),
+                                icon: const Icon(Icons.person_add_alt, size: 18),
+                                label: const Text('Add'),
+                                style: FilledButton.styleFrom(
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                onPressed: () => _handleAddContact(user),
+                              ),
+                      ),
                     );
                   },
                 ),
