@@ -112,7 +112,7 @@ void main() {
   group('ApiService.detectVoice Tests', () {
     test('detectVoiceBytes successfully sends multipart file and receives new result schema', () async {
       final mockClient = http_testing.MockClient((request) async {
-        expect(request.url.path, '/voice-detection');
+        expect(request.url.path, '/sender');
         expect(request.method, 'POST');
         expect(request.headers['content-type'], contains('multipart/form-data'));
 
@@ -127,7 +127,11 @@ void main() {
         );
       });
 
-      final apiService = ApiService(baseUrl: 'https://test-server.com', client: mockClient);
+      final apiService = ApiService(
+        baseUrl: 'https://test-server.com',
+        voiceDetectionUrl: 'https://test-server.com/sender',
+        client: mockClient,
+      );
       final result = await apiService.detectVoiceBytes([1, 2, 3, 4]);
 
       expect(result.success, isTrue);

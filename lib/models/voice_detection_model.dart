@@ -26,7 +26,7 @@ class VoiceDetectionResult {
       fakeProbability: parseDouble(json['fake_probability'] ?? json['fakeProbability']),
       bonafideScore: parseDouble(json['bonafide_score'] ?? json['bonafideScore']),
       verdict: (json['verdict'] ?? '').toString().trim().toUpperCase(),
-      message: json['message']?.toString(),
+      message: json['message']?.toString() ?? json['error']?.toString(),
     );
   }
 

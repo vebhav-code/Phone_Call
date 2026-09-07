@@ -209,15 +209,15 @@ class VoiceDetectionService extends ChangeNotifier {
     } on SocketException catch (e) {
       debugPrint('[VoiceDetection] Network socket error: $e');
       _status = VoiceAnalysisStatus.uploadFailed;
-      _errorMessage = 'Voice analysis unavailable';
+      _errorMessage = '$e';
     } on HttpException catch (e) {
       debugPrint('[VoiceDetection] HTTP error: $e');
       _status = VoiceAnalysisStatus.uploadFailed;
-      _errorMessage = 'Voice analysis unavailable';
+     _errorMessage = '$e';
     } catch (e) {
       debugPrint('[VoiceDetection] Upload/detection error: $e');
       _status = VoiceAnalysisStatus.uploadFailed;
-      _errorMessage = 'Voice analysis unavailable';
+      _errorMessage = '$e';
     } finally {
       _deleteTempFile();
       notifyListeners();

@@ -35,12 +35,15 @@ class ContactAlreadyAddedException extends ApiException {
 /// and contact management endpoints on the signaling backend.
 class ApiService {
   final String baseUrl;
+  final String voiceDetectionUrl;
   final http.Client _client;
 
   ApiService({
     String? baseUrl,
+    String? voiceDetectionUrl,
     http.Client? client,
   })  : baseUrl = baseUrl ?? AppConfig.baseUrl,
+        voiceDetectionUrl = voiceDetectionUrl ?? AppConfig.voiceDetectionUrl,
         _client = client ?? http.Client();
 
   /// Registers a new user with a display name and unique username.
@@ -186,29 +189,56 @@ class ApiService {
     }
   }
 
-  /// Uploads an audio byte buffer to POST /voice-detection using multipart/form-data.
+  /// Uploads an MP3 audio file to the voice detection endpoint using multipart/form-data.
+  Future<VoiceDetectionResult> detectVoice(File audioFile) async {
+    final uri = Uri.parse(voiceDetectionUrl);
+    final request = http.MultipartRequest('POST', uri);
+
+    request.files.add(
+      await http.MultipartFile.fromPath(
+        'audio',
+        audioFile.path,
+      ),
+    );
+
+    debugPrint('[VoiceDetection] uploading audio to $voiceDetectionUrl...');
+
+    final streamedResponse = await _client.send(request);
+    final response = await http.Response.fromStream(streamedResponse);
+
+    debugPrint('[VoiceDetection] HTTP status = ${response.statusCode}');
+    debugPrint('[VoiceDetection] response = ${response.body}');
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return VoiceDetectionResult.fromJson(data);
+    }
+
+    throw ApiException(
+      _parseErrorMessage(response),
+      statusCode: response.statusCode,
+    );
+  }
+
+  /// Uploads an audio byte buffer to the voice detection endpoint using multipart/form-data.
   Future<VoiceDetectionResult> detectVoiceBytes(
     List<int> bytes, {
     String filename = 'remote_voice.mp3',
   }) async {
-    final uri = Uri.parse('$baseUrl/voice-detection');
+    final uri = Uri.parse(voiceDetectionUrl);
     final request = http.MultipartRequest('POST', uri);
 
     request.files.add(
       http.MultipartFile.fromBytes(
-        'file',
+        'audio',
         bytes,
         filename: filename,
         contentType: MediaType('audio', 'mpeg'),
       ),
     );
 
-    debugPrint('[VoiceDetection] uploading...');
     final streamedResponse = await _client.send(request);
     final response = await http.Response.fromStream(streamedResponse);
-
-    debugPrint('[VoiceDetection] HTTP status = ${response.statusCode}');
-    debugPrint('[VoiceDetection] response = ${response.body}');
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -219,12 +249,6 @@ class ApiService {
         statusCode: response.statusCode,
       );
     }
-  }
-
-  /// Uploads an MP3 audio file to POST /voice-detection using multipart/form-data.
-  Future<VoiceDetectionResult> detectVoice(File audioFile) async {
-    final bytes = await audioFile.readAsBytes();
-    return detectVoiceBytes(bytes, filename: 'remote_voice.mp3');
   }
 
   /// Closes the underlying HTTP client.
@@ -248,6 +272,8 @@ class ApiService {
                 .join(', ');
           } else if (decoded['message'] is String) {
             return decoded['message'] as String;
+          } else if (decoded['error'] is String) {
+            return decoded['error'] as String;
           }
         }
       } catch (_) {
