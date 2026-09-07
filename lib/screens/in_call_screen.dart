@@ -537,9 +537,12 @@ class _InCallScreenState extends State<InCallScreen> {
             color: Colors.black26,
             borderRadius: BorderRadius.circular(16),
           ),
-          child: const Text(
-            'Voice analysis unavailable',
-            style: TextStyle(
+          child: Text(
+            _voiceDetectionService?.errorMessage != null &&
+                    _voiceDetectionService!.errorMessage!.isNotEmpty
+                ? 'Voice upload failed: ${_voiceDetectionService!.errorMessage!}'
+                : 'Voice upload failed',
+            style: const TextStyle(
               fontSize: 12,
               color: Colors.amber,
             ),

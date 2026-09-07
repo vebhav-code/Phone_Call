@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../models/voice_detection_model.dart';
@@ -15,6 +17,9 @@ enum VoiceAnalysisStatus {
   uploadFailed,
   analysisFailed,
 }
+
+/// Function signature for transcoding audio from one format to another.
+typedef AudioTranscoder = Future<bool> Function(String inputPath, String outputPath);
 
 /// Abstract recorder interface for capturing remote caller audio.
 /// Enables seamless platform handling and isolated testing.
@@ -74,6 +79,7 @@ class VoiceDetectionService extends ChangeNotifier {
   final ApiService apiService;
   final RemoteAudioRecorder recorder;
   final Duration recordingDuration;
+  final AudioTranscoder? audioTranscoder;
 
   VoiceAnalysisStatus _status = VoiceAnalysisStatus.idle;
   VoiceDetectionResult? _result;
@@ -81,6 +87,7 @@ class VoiceDetectionService extends ChangeNotifier {
 
   Timer? _recordingTimer;
   File? _tempFile;
+  File? _tempWavFile;
   bool _hasStarted = false;
   bool _isRecording = false;
   bool _isCancelled = false;
@@ -90,6 +97,7 @@ class VoiceDetectionService extends ChangeNotifier {
     ApiService? apiService,
     RemoteAudioRecorder? recorder,
     this.recordingDuration = const Duration(seconds: 10),
+    this.audioTranscoder,
   })  : apiService = apiService ?? ApiService(),
         recorder = recorder ?? WebRTCRemoteAudioRecorder();
 
@@ -115,7 +123,7 @@ class VoiceDetectionService extends ChangeNotifier {
     try {
       final tempDir = Directory.systemTemp;
       final filePath =
-          '${tempDir.path}/caller_voice_${DateTime.now().millisecondsSinceEpoch}.mp3';
+          '${tempDir.path}/caller_voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
       _tempFile = File(filePath);
 
       await recorder.start(filePath, remoteStream: remoteStream);
@@ -148,6 +156,7 @@ class VoiceDetectionService extends ChangeNotifier {
     // Exactly 10 seconds reached: stop the recording
     debugPrint('[VoiceDetection] recording stopped');
     _isRecording = false;
+
     try {
       await recorder.stop();
     } catch (e) {
@@ -162,14 +171,34 @@ class VoiceDetectionService extends ChangeNotifier {
     final file = _tempFile;
     final fileExists = file != null && await file.exists();
     final fileSize = fileExists ? await file.length() : 0;
-    final hasMp3Ext = file != null && file.path.toLowerCase().endsWith('.mp3');
+    final hasM4aExt = file != null && file.path.toLowerCase().endsWith('.m4a');
 
     debugPrint('[VoiceDetection] file path = ${file?.path}');
     debugPrint('[VoiceDetection] file exists = $fileExists');
     debugPrint('[VoiceDetection] file size = $fileSize');
 
-    if (!fileExists || fileSize == 0 || !hasMp3Ext) {
-      debugPrint('[VoiceDetection] File missing, empty, or not .mp3. Reporting recording failure.');
+    if (!fileExists || fileSize == 0 || !hasM4aExt) {
+      debugPrint('[VoiceDetection] File missing, empty, or not .m4a. Reporting recording failure.');
+      _status = VoiceAnalysisStatus.recordingFailed;
+      _errorMessage = 'Voice recording failed';
+      _deleteTempFile();
+      notifyListeners();
+      return;
+    }
+
+    final tempDir = Directory.systemTemp;
+    final wavFilePath =
+        '${tempDir.path}/caller_voice_${DateTime.now().millisecondsSinceEpoch}.wav';
+    _tempWavFile = File(wavFilePath);
+
+    debugPrint('[VoiceDetection] transcoding .m4a to .wav: $wavFilePath');
+    final transcodeSuccess = await _transcodeToWav(file.path, wavFilePath);
+    final wavFile = _tempWavFile;
+    final wavExists = wavFile != null && await wavFile.exists();
+    final wavSize = wavExists ? await wavFile.length() : 0;
+
+    if (!transcodeSuccess || !wavExists || wavSize == 0) {
+      debugPrint('[VoiceDetection] FFmpeg transcoding failed or output missing/empty.');
       _status = VoiceAnalysisStatus.recordingFailed;
       _errorMessage = 'Voice recording failed';
       _deleteTempFile();
@@ -182,7 +211,7 @@ class VoiceDetectionService extends ChangeNotifier {
 
     try {
       debugPrint('[VoiceDetection] upload started');
-      final detectionResult = await apiService.detectVoice(file);
+      final detectionResult = await apiService.detectVoice(wavFile);
 
       if (_isCancelled || _isDisposed || (isCallActive != null && !isCallActive())) {
         _deleteTempFile();
@@ -213,7 +242,13 @@ class VoiceDetectionService extends ChangeNotifier {
     } on HttpException catch (e) {
       debugPrint('[VoiceDetection] HTTP error: $e');
       _status = VoiceAnalysisStatus.uploadFailed;
-     _errorMessage = '$e';
+      _errorMessage = '$e';
+    } on ApiException catch (e) {
+      debugPrint('[VoiceDetection] API error: ${e.message} (HTTP ${e.statusCode})');
+      _status = VoiceAnalysisStatus.uploadFailed;
+      _errorMessage = e.statusCode > 0
+          ? 'Upload failed (HTTP ${e.statusCode}): ${e.message}'
+          : 'Upload failed: ${e.message}';
     } catch (e) {
       debugPrint('[VoiceDetection] Upload/detection error: $e');
       _status = VoiceAnalysisStatus.uploadFailed;
@@ -221,6 +256,22 @@ class VoiceDetectionService extends ChangeNotifier {
     } finally {
       _deleteTempFile();
       notifyListeners();
+    }
+  }
+
+  Future<bool> _transcodeToWav(String inputPath, String outputPath) async {
+    if (audioTranscoder != null) {
+      return await audioTranscoder!(inputPath, outputPath);
+    }
+    try {
+      final session = await FFmpegKit.execute(
+        '-y -i "$inputPath" -ar 16000 -ac 1 -c:a pcm_s16le "$outputPath"',
+      );
+      final returnCode = await session.getReturnCode();
+      return ReturnCode.isSuccess(returnCode);
+    } catch (e) {
+      debugPrint('[VoiceDetection] FFmpegKit transcode exception: $e');
+      return false;
     }
   }
 
@@ -250,6 +301,18 @@ class VoiceDetectionService extends ChangeNotifier {
         }
       } catch (e) {
         debugPrint('[VoiceDetectionService WARN] Error deleting temp file: $e');
+      }
+    }
+
+    final wavFile = _tempWavFile;
+    _tempWavFile = null;
+    if (wavFile != null) {
+      try {
+        if (wavFile.existsSync()) {
+          wavFile.deleteSync();
+        }
+      } catch (e) {
+        debugPrint('[VoiceDetectionService WARN] Error deleting temp wav file: $e');
       }
     }
   }

@@ -140,6 +140,70 @@ void main() {
       expect(result.displayFakeProbability, '13.38%');
     });
 
+    test('detectVoiceBytes includes Authorization Bearer header when hfToken is provided', () async {
+      final mockClient = http_testing.MockClient((request) async {
+        expect(request.url.path, '/sender');
+        expect(request.headers['authorization'], 'Bearer test_hf_token_123');
+
+        return http.Response(
+          jsonEncode({
+            'success': true,
+            'fake_probability': 0.1,
+            'bonafide_score': 0.9,
+            'verdict': 'REAL',
+          }),
+          200,
+        );
+      });
+
+      final apiService = ApiService(
+        baseUrl: 'https://test-server.com',
+        voiceDetectionUrl: 'https://test-server.com/sender',
+        hfToken: 'test_hf_token_123',
+        client: mockClient,
+      );
+      final result = await apiService.detectVoiceBytes([1, 2, 3, 4]);
+      expect(result.success, isTrue);
+    });
+
+    test('detectVoice successfully sends multipart file with audio/wav contentType', () async {
+      final tempDir = Directory.systemTemp;
+      final testFile = File('${tempDir.path}/caller_voice_test.wav');
+      await testFile.writeAsBytes([0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45]);
+
+      final mockClient = http_testing.MockClient((request) async {
+        expect(request.url.path, '/sender');
+        expect(request.method, 'POST');
+        expect(request.headers['content-type'], contains('multipart/form-data'));
+        expect(request.body, contains('name="audio"'));
+        expect(request.body.toLowerCase(), contains('content-type: audio/wav'));
+
+        return http.Response(
+          jsonEncode({
+            'success': true,
+            'fake_probability': 0.1338,
+            'bonafide_score': 0.8662,
+            'verdict': 'REAL',
+          }),
+          200,
+        );
+      });
+
+      final apiService = ApiService(
+        baseUrl: 'https://test-server.com',
+        voiceDetectionUrl: 'https://test-server.com/sender',
+        client: mockClient,
+      );
+      final result = await apiService.detectVoice(testFile);
+
+      expect(result.success, isTrue);
+      expect(result.displayVerdict, 'REAL');
+
+      if (testFile.existsSync()) {
+        testFile.deleteSync();
+      }
+    });
+
     test('detectVoice throws ApiException on HTTP 500', () async {
       final mockClient = http_testing.MockClient((request) async {
         return http.Response(
@@ -158,9 +222,19 @@ void main() {
   });
 
   group('VoiceDetectionService Lifecycle Tests', () {
-    test('completes 10s recording, uploads MP3, and displays result with verdict and scores', () async {
+    Future<bool> dummyTranscoder(String inputPath, String outputPath) async {
+      final file = File(outputPath);
+      await file.writeAsBytes([0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45]);
+      return true;
+    }
+
+    test('completes 10s recording, transcodes to WAV, uploads, and displays result with verdict and scores', () async {
       final mockRecorder = MockRemoteAudioRecorder();
       final mockClient = http_testing.MockClient((request) async {
+        expect(request.headers['content-type'], contains('multipart/form-data'));
+        expect(request.body.toLowerCase(), contains('content-type: audio/wav'));
+        expect(request.body, contains('.wav'));
+
         return http.Response(
           jsonEncode({
             'success': true,
@@ -177,6 +251,7 @@ void main() {
         apiService: apiService,
         recorder: mockRecorder,
         recordingDuration: const Duration(milliseconds: 50),
+        audioTranscoder: dummyTranscoder,
       );
 
       expect(service.status, VoiceAnalysisStatus.idle);
@@ -196,7 +271,7 @@ void main() {
       expect(service.result?.displayBonafideScore, '86.62%');
       expect(service.result?.displayFakeProbability, '13.38%');
 
-      // Temporary MP3 should have been cleaned up
+      // Temporary files should have been cleaned up
       if (mockRecorder.lastRecordedPath != null) {
         expect(File(mockRecorder.lastRecordedPath!).existsSync(), isFalse);
       }
@@ -218,6 +293,7 @@ void main() {
         apiService: apiService,
         recorder: mockRecorder,
         recordingDuration: const Duration(milliseconds: 200),
+        audioTranscoder: dummyTranscoder,
       );
 
       bool callActive = true;
@@ -272,6 +348,23 @@ void main() {
       service.dispose();
     });
 
+    test('reports recording failure when audio transcoding fails', () async {
+      final mockRecorder = MockRemoteAudioRecorder();
+      final service = VoiceDetectionService(
+        recorder: mockRecorder,
+        recordingDuration: const Duration(milliseconds: 50),
+        audioTranscoder: (input, output) async => false,
+      );
+
+      await service.startAnalysis(isCallActive: () => true);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(service.status, VoiceAnalysisStatus.recordingFailed);
+      expect(service.errorMessage, 'Voice recording failed');
+
+      service.dispose();
+    });
+
     test('handles upload failure gracefully by setting uploadFailed status', () async {
       final mockRecorder = MockRemoteAudioRecorder();
       final mockClient = http_testing.MockClient((request) async {
@@ -283,13 +376,14 @@ void main() {
         apiService: apiService,
         recorder: mockRecorder,
         recordingDuration: const Duration(milliseconds: 50),
+        audioTranscoder: dummyTranscoder,
       );
 
       await service.startAnalysis(isCallActive: () => true);
       await Future<void>.delayed(const Duration(milliseconds: 100));
 
       expect(service.status, VoiceAnalysisStatus.uploadFailed);
-      expect(service.errorMessage, 'Voice analysis unavailable');
+      expect(service.errorMessage, contains('SocketException'));
 
       service.dispose();
     });
@@ -311,6 +405,7 @@ void main() {
         apiService: apiService,
         recorder: mockRecorder,
         recordingDuration: const Duration(milliseconds: 50),
+        audioTranscoder: dummyTranscoder,
       );
 
       await service.startAnalysis(isCallActive: () => true);
@@ -423,7 +518,7 @@ void main() {
       // 7. Upload failed
       testService.emitStatus(VoiceAnalysisStatus.uploadFailed);
       await tester.pump();
-      expect(find.text('Voice analysis unavailable'), findsOneWidget);
+      expect(find.text('Voice upload failed'), findsOneWidget);
       expect(find.byKey(const Key('voice_analysis_upload_failed')), findsOneWidget);
 
       // 8. Analysis failed

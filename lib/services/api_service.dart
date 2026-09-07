@@ -36,14 +36,17 @@ class ContactAlreadyAddedException extends ApiException {
 class ApiService {
   final String baseUrl;
   final String voiceDetectionUrl;
+  final String hfToken;
   final http.Client _client;
 
   ApiService({
     String? baseUrl,
     String? voiceDetectionUrl,
+    String? hfToken,
     http.Client? client,
   })  : baseUrl = baseUrl ?? AppConfig.baseUrl,
         voiceDetectionUrl = voiceDetectionUrl ?? AppConfig.voiceDetectionUrl,
+        hfToken = hfToken ?? AppConfig.hfToken,
         _client = client ?? http.Client();
 
   /// Registers a new user with a display name and unique username.
@@ -189,21 +192,31 @@ class ApiService {
     }
   }
 
-  /// Uploads an MP3 audio file to the voice detection endpoint using multipart/form-data.
+  /// Uploads a WAV audio file to the voice detection endpoint using multipart/form-data.
   Future<VoiceDetectionResult> detectVoice(File audioFile) async {
     final uri = Uri.parse(voiceDetectionUrl);
     final request = http.MultipartRequest('POST', uri);
+
+    if (hfToken.isNotEmpty) {
+      request.headers['Authorization'] = 'Bearer $hfToken';
+    }
 
     request.files.add(
       await http.MultipartFile.fromPath(
         'audio',
         audioFile.path,
+        contentType: MediaType('audio', 'wav'),
       ),
     );
 
     debugPrint('[VoiceDetection] uploading audio to $voiceDetectionUrl...');
 
-    final streamedResponse = await _client.send(request);
+    final streamedResponse = await _client.send(request).timeout(
+      const Duration(seconds: 25),
+      onTimeout: () {
+        throw const ApiException('Voice detection request timed out');
+      },
+    );
     final response = await http.Response.fromStream(streamedResponse);
 
     debugPrint('[VoiceDetection] HTTP status = ${response.statusCode}');
@@ -228,6 +241,10 @@ class ApiService {
     final uri = Uri.parse(voiceDetectionUrl);
     final request = http.MultipartRequest('POST', uri);
 
+    if (hfToken.isNotEmpty) {
+      request.headers['Authorization'] = 'Bearer $hfToken';
+    }
+
     request.files.add(
       http.MultipartFile.fromBytes(
         'audio',
@@ -237,7 +254,12 @@ class ApiService {
       ),
     );
 
-    final streamedResponse = await _client.send(request);
+    final streamedResponse = await _client.send(request).timeout(
+      const Duration(seconds: 25),
+      onTimeout: () {
+        throw const ApiException('Voice detection request timed out');
+      },
+    );
     final response = await http.Response.fromStream(streamedResponse);
 
     if (response.statusCode == 200) {
